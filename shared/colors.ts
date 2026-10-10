@@ -27,9 +27,22 @@ export function isTextColor(value: string) {
   return (TEXT_COLORS as readonly string[]).includes(value)
 }
 
-export function defaultItemColor(kind: 'sticky' | 'text' | 'rect' | 'ellipse') {
+export const FONT_SIZES = [18, 28, 40] as const
+
+export const FONT_SIZE_LABELS: Record<(typeof FONT_SIZES)[number], string> = {
+  18: '細',
+  28: '中',
+  40: '大',
+}
+
+export function isFontSize(value: number) {
+  return value === 18 || value === 28 || value === 40
+}
+
+export function defaultItemColor(kind: 'sticky' | 'text' | 'rect' | 'ellipse' | 'image') {
   if (kind === 'text') return TEXT_COLORS[0]
   if (kind === 'rect') return NOTE_COLORS[2]
   if (kind === 'ellipse') return NOTE_COLORS[3]
+  if (kind === 'image') return NOTE_COLORS[5]
   return NOTE_COLORS[0]
 }

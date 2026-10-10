@@ -111,18 +111,18 @@ export function WallView({
       <span className="tape" aria-hidden />
       <div>
         <div className="flex items-baseline justify-between gap-2">
-          <p className="truncate text-sm font-semibold">{post.authorName}</p>
-          <p className="shrink-0 text-xs text-ink/55">{formatWhen(post.createdAt)}</p>
+          <p className="truncate text-base font-bold">{post.authorName}</p>
+          <p className="shrink-0 text-sm text-muted">{formatWhen(post.createdAt)}</p>
         </div>
-        {layout === 'free' && canMove && <p className="text-[11px] text-ink/45">拖動這裡移動</p>}
+        {layout === 'free' && canMove && <p className="text-sm text-muted">拖動可以擺位</p>}
       </div>
       <PostBody post={post} />
       {canChange(post) && (
         <div className="flex justify-end gap-2">
-          <button type="button" className="text-xs text-ink/70 underline-offset-2 hover:underline" onClick={() => onEdit(post)}>
+          <button type="button" className="min-h-11 rounded-xl px-3 text-base font-semibold text-ink" onClick={() => onEdit(post)}>
             編輯
           </button>
-          <button type="button" className="text-xs text-stamp underline-offset-2 hover:underline" onClick={() => onDelete(post)}>
+          <button type="button" className="min-h-11 rounded-xl px-3 text-base font-semibold text-danger" onClick={() => onDelete(post)}>
             刪除
           </button>
         </div>
@@ -132,7 +132,7 @@ export function WallView({
 
   if (layout === 'grid') {
     return (
-      <div className="cork relative z-0 min-h-[calc(100dvh-4.75rem)] px-4 py-6">
+      <div className="cork relative z-0 min-h-[calc(100dvh-4.75rem)] px-4 py-6 pb-28 lg:pb-6">
         {posts.length === 0 ? (
           <Empty />
         ) : (
@@ -143,10 +143,10 @@ export function WallView({
   }
 
   return (
-    <div className="cork relative z-0 min-h-[calc(100dvh-4.75rem)] overflow-x-auto px-3 py-6">
-      <p className="mb-3 text-center text-xs text-white/90 sm:hidden">螢幕較窄時可以左右滑動壁報</p>
-      <div ref={boardRef} className="relative mx-auto" style={{ width: WALL_WIDTH, minHeight: height }}>
-        {posts.length === 0 && <Empty floating />}
+    <div className="cork relative z-0 min-h-[calc(100dvh-4.75rem)] overflow-x-auto px-3 py-6 pb-28 lg:pb-6">
+      <p className="mb-3 text-center text-sm text-white sm:hidden">可以左右滑動壁報</p>
+      {posts.length === 0 && <Empty floating />}
+      <div ref={boardRef} className="relative mx-auto" style={{ width: WALL_WIDTH, minHeight: posts.length === 0 ? 480 : height }}>
         {cards}
       </div>
     </div>
@@ -155,10 +155,12 @@ export function WallView({
 
 function Empty({ floating = false }: { floating?: boolean }) {
   return (
-    <div className={floating ? 'absolute left-8 top-8 max-w-sm' : 'mx-auto max-w-sm'}>
-      <div className="note-card bg-paper p-5 text-ink">
-        <p className="font-serif text-xl">這塊壁報還是空白的</p>
-        <p className="mt-2 text-sm leading-6 text-ink/70">按「新增貼文」，貼上文字、圖片或 YouTube。同學打開同一條連結就能一起看到。</p>
+    <div className={floating ? 'pointer-events-none absolute inset-x-0 top-24 z-10 flex justify-center px-4' : 'grid min-h-[50dvh] place-items-center'}>
+      <div className="note-card max-w-sm bg-paper p-6 text-center text-ink">
+        <p className="font-serif text-2xl font-bold">
+          <span className="lg:hidden">撳右下「＋」加第一張貼文</span>
+          <span className="hidden lg:inline">撳上面「＋ 新增貼文」加第一張貼文</span>
+        </p>
       </div>
     </div>
   )
@@ -181,7 +183,7 @@ function PostBody({ post }: { post: Post }) {
           />
         </div>
       )}
-      {post.body && <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">{post.body}</p>}
+      {post.body && <p className="whitespace-pre-wrap break-words text-lg leading-relaxed">{post.body}</p>}
     </div>
   )
 }

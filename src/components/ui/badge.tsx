@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 export function Badge({ className, ...props }: ComponentProps<'span'>) {
   return (
     <span
-      className={cn('inline-flex items-center rounded-full bg-cream px-2.5 py-0.5 text-xs font-medium text-ink/80', className)}
+      className={cn('inline-flex items-center rounded-full bg-cream px-3 py-1 text-sm font-semibold text-ink', className)}
       {...props}
     />
   )

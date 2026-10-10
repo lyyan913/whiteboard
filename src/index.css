@@ -3,15 +3,21 @@
 @theme {
   --font-sans: "Noto Sans TC", "WenQuanYi Micro Hei", "PingFang HK", "Microsoft JhengHei", sans-serif;
   --font-serif: "Noto Serif TC", "Noto Sans TC", "WenQuanYi Micro Hei", serif;
-  --color-ink: #2a2118;
-  --color-cream: #f3ecdf;
-  --color-paper: #fffdf8;
+  --color-ink: #1f1a14;
+  --color-muted: #5c5348;
+  --color-cream: #fff8ef;
+  --color-paper: #ffffff;
   --color-cork: #d1a15c;
   --color-wood: #7a4e2d;
   --color-stamp: #c4492c;
-  --color-leaf: #1f7a64;
+  --color-stamp-hover: #a83b24;
+  --color-leaf: #1f7a54;
   --color-sky: #1d4e89;
-  --color-line: #e6dccb;
+  --color-warn: #b45309;
+  --color-danger: #b91c1c;
+  --color-line: #e8dfd2;
+  --radius-card: 16px;
+  --touch: 52px;
 }
 
 html,
@@ -85,4 +91,17 @@ textarea {
   background-image: radial-gradient(#d9d0c2 1.15px, transparent 1.2px);
   background-size: 28px 28px;
   touch-action: none;
+}
+
+.card-in {
+  animation: card-in 180ms ease;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

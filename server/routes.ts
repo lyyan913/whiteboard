@@ -4,7 +4,7 @@ import { Router } from 'express'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import multer from 'multer'
-import { isNoteColor, isTextColor } from '../shared/colors'
+import { isFontSize, isNoteColor, isTextColor } from '../shared/colors'
 import { extractYouTubeId, isAllowedImageUrl } from '../shared/media'
 import type { BoardType, CanvasItem, ItemKind, Post, PostKind, WallLayout } from '../shared/types'
 import { cleanBody, cleanClientId, cleanText, makeId } from '../shared/text'
@@ -20,22 +20,32 @@ import {
 } from './auth'
 import {
   countItems,
+  countPages,
   countPosts,
   createBoard,
   createWorkspace,
   deleteBoard,
+  countPageItems,
+  deletePage,
   getBoard,
   getBoardRow,
   getItem,
+  getPage,
   getPost,
+  insertPage,
   itemIdExists,
+  listAllItems,
   getWorkspace,
   getWorkspaceByName,
   insertItem,
   insertPost,
   listBoards,
   listItems,
+  listPageItems,
+  listPages,
   listPosts,
+  listWorkSnippets,
+  nextPageZ,
   nextWallSpot,
   nextZ,
   publicWorkspace,
@@ -44,6 +54,7 @@ import {
   saveItem,
   savePost,
   updateBoard,
+  updatePageTitle,
   uploadDir,
 } from './db'
 import { broadcast } from './hub'
@@ -126,6 +137,18 @@ export function createApi() {
     res.json({ ok: true })
   })
 
+  router.get('/classrooms/:workspaceId', (req, res) => {
+    const row = getWorkspace(req.params.workspaceId)
+    if (!row) throw new HttpError(404, '找不到課室')
+    const teacher = optionalTeacher(req)
+    const works = listWorkSnippets(row.id)
+    res.json({
+      workspace: publicWorkspace(row),
+      role: teacher && teacher.wid === row.id ? 'teacher' : 'student',
+      boards: listBoards(row.id).map((board) => ({ ...board, works: works.get(board.id) ?? [] })),
+    })
+  })
+
   router.post('/workspaces', (req, res) => {
     const name = cleanText(req.body?.name, 30)
     const pin = typeof req.body?.pin === 'string' ? req.body.pin : ''
@@ -161,8 +184,9 @@ export function createApi() {
   router.post('/boards', (req, res) => {
     const teacher = teacherOf(req)
     const title = cleanText(req.body?.title, 40)
-    const type: BoardType = req.body?.type === 'canvas' ? 'canvas' : req.body?.type === 'wall' ? 'wall' : 'wall'
-    if (req.body?.type !== 'wall' && req.body?.type !== 'canvas') throw new HttpError(400, '請選擇壁報類型')
+    const rawType = req.body?.type
+    if (rawType !== 'wall' && rawType !== 'canvas' && rawType !== 'sandbox') throw new HttpError(400, '請選擇壁報類型')
+    const type: BoardType = rawType
     if (!title) throw new HttpError(400, '請填寫壁報標題')
     const groupLabel = cleanText(req.body?.groupLabel, 20) || null
     const password = typeof req.body?.password === 'string' ? req.body.password : ''
@@ -176,7 +200,21 @@ export function createApi() {
       groupLabel,
       passwordHash: password ? hashSecret(password) : null,
     })
-    res.status(201).json({ board: { ...board, activityCount: 0 } })
+    let activityCount = 0
+    if (type === 'sandbox') {
+      const now = Date.now()
+      insertPage({
+        id: makeId(10),
+        boardId: board.id,
+        title: '版面 1',
+        authorName: '教師',
+        clientId: 'teacher-board',
+        createdAt: now,
+        updatedAt: now,
+      })
+      activityCount = 1
+    }
+    res.status(201).json({ board: { ...board, activityCount } })
   })
 
   router.patch('/boards/:boardId', (req, res) => {
@@ -189,6 +227,7 @@ export function createApi() {
       passwordHash?: string
       clearPassword?: boolean
       locked?: boolean
+      allowStudentPages?: boolean
     } = {}
     if ('title' in (req.body ?? {})) {
       const title = cleanText(req.body?.title, 40)
@@ -207,6 +246,7 @@ export function createApi() {
       patch.clearPassword = false
     }
     if (typeof req.body?.locked === 'boolean') patch.locked = req.body.locked
+    if (typeof req.body?.allowStudentPages === 'boolean') patch.allowStudentPages = req.body.allowStudentPages
     const board = updateBoard(boardId, patch)
     if (!board) throw new HttpError(404, '找不到壁報')
     broadcast(boardId, { type: 'board.updated', board })
@@ -254,9 +294,12 @@ export function createApi() {
     const row = getBoardRow(boardId)
     if (!row) throw new HttpError(404, '找不到壁報')
     const teacher = optionalTeacher(req)
+    const classroomId = typeof req.body?.classroomId === 'string' ? req.body.classroomId : ''
     let role: 'teacher' | 'student' = 'student'
     if (teacher && teacher.wid === row.workspace_id) {
       role = 'teacher'
+    } else if (classroomId && classroomId === row.workspace_id) {
+      role = 'student'
     } else if (row.password_hash) {
       const password = typeof req.body?.password === 'string' ? req.body.password : ''
       if (!verifySecret(password, row.password_hash)) {
@@ -270,7 +313,8 @@ export function createApi() {
       role,
       board,
       posts: listPosts(boardId),
-      items: listItems(boardId),
+      items: board.type === 'sandbox' ? listAllItems(boardId) : listItems(boardId),
+      pages: listPages(boardId),
     })
   })
 
@@ -279,7 +323,84 @@ export function createApi() {
     const access = boardAccess(req, boardId)
     const board = getBoard(boardId)
     if (!board) throw new HttpError(404, '找不到壁報')
-    res.json({ role: access.role, board, posts: listPosts(boardId), items: listItems(boardId) })
+    const items = board.type === 'sandbox' ? listAllItems(boardId) : listItems(boardId)
+    res.json({ role: access.role, board, posts: listPosts(boardId), items, pages: listPages(boardId) })
+  })
+
+  router.get('/boards/:boardId/pages', (req, res) => {
+    const boardId = req.params.boardId
+    boardAccess(req, boardId)
+    const row = getBoardRow(boardId)
+    if (!row || row.type !== 'sandbox') throw new HttpError(400, '這不是作品集')
+    res.json({ pages: listPages(boardId) })
+  })
+
+  router.post('/boards/:boardId/pages', (req, res) => {
+    const boardId = req.params.boardId
+    const access = boardAccess(req, boardId)
+    const row = getBoardRow(boardId)
+    if (!row || row.type !== 'sandbox') throw new HttpError(400, '這不是作品集')
+    if (access.role !== 'teacher' && Number(row.allow_student_pages) !== 1) {
+      throw new HttpError(403, '老師未開放新版面')
+    }
+    const clientId = cleanClientId(req.body?.clientId)
+    if (!clientId) throw new HttpError(400, '請先設定暱稱')
+    const authorName = cleanText(req.body?.authorName, 20) || '同學'
+    const title = cleanText(req.body?.title, 40) || `版面 ${countPages(boardId) + 1}`
+    const now = Date.now()
+    const page = insertPage({
+      id: makeId(10),
+      boardId,
+      title,
+      authorName,
+      clientId,
+      createdAt: now,
+      updatedAt: now,
+    })
+    broadcast(boardId, { type: 'page.created', page })
+    res.status(201).json({ page, created: true })
+  })
+
+  router.patch('/boards/:boardId/pages/:pageId', (req, res) => {
+    const boardId = req.params.boardId
+    const access = boardAccess(req, boardId)
+    const row = getBoardRow(boardId)
+    if (!row || row.type !== 'sandbox') throw new HttpError(400, '這不是作品集')
+    const page = getPage(boardId, req.params.pageId)
+    if (!page) throw new HttpError(404, '找不到這個版面')
+    const clientId = cleanClientId(req.body?.clientId)
+    if (access.role !== 'teacher' && (Number(row.allow_student_pages) !== 1 || page.clientId !== clientId)) {
+      throw new HttpError(403, '只能改自己開的版面')
+    }
+    const title = cleanText(req.body?.title, 40)
+    if (!title) throw new HttpError(400, '請填寫版面名稱')
+    const saved = updatePageTitle(boardId, page.id, title)
+    broadcast(boardId, { type: 'page.updated', page: saved })
+    res.json({ page: saved })
+  })
+
+  router.get('/boards/:boardId/pages/:pageId/state', (req, res) => {
+    const boardId = req.params.boardId
+    boardAccess(req, boardId)
+    const page = getPage(boardId, req.params.pageId)
+    if (!page) throw new HttpError(404, '找不到這個版面')
+    res.json({ page, items: listPageItems(boardId, page.id) })
+  })
+
+  router.delete('/boards/:boardId/pages/:pageId', (req, res) => {
+    const boardId = req.params.boardId
+    const access = boardAccess(req, boardId)
+    const row = getBoardRow(boardId)
+    if (!row || row.type !== 'sandbox') throw new HttpError(400, '這不是作品集')
+    const page = getPage(boardId, req.params.pageId)
+    if (!page) throw new HttpError(404, '找不到這個版面')
+    const clientId = cleanClientId(req.query.clientId)
+    if (access.role !== 'teacher' && (Number(row.allow_student_pages) !== 1 || page.clientId !== clientId)) {
+      throw new HttpError(403, '只能刪除自己開的版面')
+    }
+    deletePage(boardId, page.id)
+    broadcast(boardId, { type: 'page.deleted', id: page.id })
+    res.status(204).end()
   })
 
   router.post('/boards/:boardId/posts', (req, res) => {
@@ -387,35 +508,59 @@ export function createApi() {
   router.post('/boards/:boardId/items', (req, res) => {
     const boardId = req.params.boardId
     const access = boardAccess(req, boardId)
-    const row = writable(boardId, access.role)
-    if (row.type !== 'canvas') throw new HttpError(400, '這不是互動畫布')
-    if (countItems(boardId) >= 400) throw new HttpError(400, '畫布物件已達上限')
-    const kind = req.body?.kind as ItemKind
-    if (kind !== 'sticky' && kind !== 'text' && kind !== 'rect' && kind !== 'ellipse') {
-      throw new HttpError(400, '物件類型不正確')
-    }
+    const row = getBoardRow(boardId)
+    if (!row) throw new HttpError(404, '找不到壁報')
     const clientId = cleanClientId(req.body?.clientId)
     if (!clientId) throw new HttpError(400, '請先設定暱稱')
+    let pageId: string | null = null
+    if (row.type === 'sandbox') {
+      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師暫停咗編輯')
+      pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : ''
+      const page = pageId ? getPage(boardId, pageId) : undefined
+      if (!page) throw new HttpError(404, '找不到這個版面')
+      if (countPageItems(page.id) >= 400) throw new HttpError(400, '這個版面的物件已達上限')
+      pageId = page.id
+    } else if (row.type === 'canvas') {
+      writable(boardId, access.role)
+      if (countItems(boardId) >= 400) throw new HttpError(400, '畫布物件已達上限')
+    } else {
+      throw new HttpError(400, '這不是互動畫布')
+    }
+    const kind = req.body?.kind as ItemKind
+    if (kind !== 'sticky' && kind !== 'text' && kind !== 'rect' && kind !== 'ellipse' && kind !== 'image') {
+      throw new HttpError(400, '物件類型不正確')
+    }
     const requestedId = cleanText(req.body?.id, 24)
     const id = /^[a-zA-Z0-9]{8,24}$/.test(requestedId) ? requestedId : makeId(12)
     if (itemIdExists(id)) throw new HttpError(409, '請再試一次')
-    const colorInput = typeof req.body?.color === 'string' ? req.body.color : ''
-    const colorOk = kind === 'text' ? isTextColor(colorInput) : isNoteColor(colorInput)
-    if (!colorOk) throw new HttpError(400, '不支援這個顏色')
+    let text = cleanBody(req.body?.text, 1000)
+    let color = typeof req.body?.color === 'string' ? req.body.color : ''
+    if (kind === 'image') {
+      text = text.trim()
+      if (!isAllowedImageUrl(text)) throw new HttpError(400, '請上傳圖片')
+      if (!isNoteColor(color)) color = '#fffdf8'
+    } else if (kind === 'text') {
+      if (!isTextColor(color)) throw new HttpError(400, '不支援這個顏色')
+    } else if (!isNoteColor(color)) {
+      throw new HttpError(400, '不支援這個顏色')
+    }
+    const fontSize = isFontSize(Number(req.body?.fontSize)) ? Number(req.body.fontSize) : 28
     const now = Date.now()
     const item: CanvasItem = {
       id,
       boardId,
+      pageId,
       authorName: cleanText(req.body?.authorName, 20) || '同學',
       clientId,
       kind,
-      text: cleanBody(req.body?.text, 1000),
+      text,
       x: clamp(Number(req.body?.x), -8000, 16000),
       y: clamp(Number(req.body?.y), -8000, 16000),
       w: clamp(Number(req.body?.w), 48, 1200),
       h: clamp(Number(req.body?.h), 36, 1000),
-      color: colorInput,
-      z: nextZ('canvas_items', boardId),
+      color,
+      fontSize,
+      z: pageId ? nextPageZ(pageId) : nextZ('canvas_items', boardId),
       createdAt: now,
       updatedAt: now,
     }
@@ -427,17 +572,36 @@ export function createApi() {
   router.patch('/boards/:boardId/items/:itemId', (req, res) => {
     const boardId = req.params.boardId
     const access = boardAccess(req, boardId)
-    writable(boardId, access.role)
+    const row = getBoardRow(boardId)
+    if (!row) throw new HttpError(404, '找不到壁報')
     const item = getItem(boardId, req.params.itemId)
     if (!item) throw new HttpError(404, '找不到物件')
+    if (row.type === 'sandbox') {
+      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師暫停咗編輯')
+      const page = item.pageId ? getPage(boardId, item.pageId) : undefined
+      if (!page) throw new HttpError(404, '找不到這個版面')
+    } else {
+      writable(boardId, access.role)
+    }
     const body = req.body ?? {}
     const next = { ...item }
-    if ('text' in body) next.text = cleanBody(body.text, 1000)
+    if ('text' in body) {
+      next.text = cleanBody(body.text, 1000)
+      if (item.kind === 'image') {
+        next.text = next.text.trim()
+        if (!isAllowedImageUrl(next.text)) throw new HttpError(400, '請上傳圖片')
+      }
+    }
     if ('color' in body) {
       const color = typeof body.color === 'string' ? body.color : ''
       const ok = item.kind === 'text' ? isTextColor(color) : isNoteColor(color)
       if (!ok) throw new HttpError(400, '不支援這個顏色')
       next.color = color
+    }
+    if ('fontSize' in body) {
+      const fontSize = Number(body.fontSize)
+      if (!isFontSize(fontSize)) throw new HttpError(400, '字級不正確')
+      next.fontSize = fontSize
     }
     if (typeof body.x === 'number') next.x = clamp(body.x, -8000, 16000)
     if (typeof body.y === 'number') next.y = clamp(body.y, -8000, 16000)
@@ -452,13 +616,20 @@ export function createApi() {
   router.delete('/boards/:boardId/items/:itemId', (req, res) => {
     const boardId = req.params.boardId
     const access = boardAccess(req, boardId)
-    writable(boardId, access.role)
+    const row = getBoardRow(boardId)
+    if (!row) throw new HttpError(404, '找不到壁報')
     const item = getItem(boardId, req.params.itemId)
     if (!item) throw new HttpError(404, '找不到物件')
     const clientId = cleanClientId(req.query.clientId)
-    if (access.role !== 'teacher' && item.clientId !== clientId) throw new HttpError(403, '只能刪除自己新增的物件')
+    if (row.type === 'sandbox') {
+      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師暫停咗編輯')
+      if (access.role !== 'teacher' && item.clientId !== clientId) throw new HttpError(403, '只能刪除自己的物件')
+    } else {
+      writable(boardId, access.role)
+      if (access.role !== 'teacher' && item.clientId !== clientId) throw new HttpError(403, '只能刪除自己新增的物件')
+    }
     removeItem(boardId, item.id)
-    broadcast(boardId, { type: 'item.deleted', id: item.id })
+    broadcast(boardId, { type: 'item.deleted', id: item.id, pageId: item.pageId })
     res.status(204).end()
   })
 

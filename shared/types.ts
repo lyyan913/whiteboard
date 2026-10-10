@@ -1,7 +1,7 @@
-export type BoardType = 'wall' | 'canvas'
+export type BoardType = 'wall' | 'canvas' | 'sandbox'
 export type WallLayout = 'free' | 'grid'
 export type PostKind = 'text' | 'image' | 'youtube'
-export type ItemKind = 'sticky' | 'text' | 'rect' | 'ellipse'
+export type ItemKind = 'sticky' | 'text' | 'rect' | 'ellipse' | 'image'
 export type Role = 'teacher' | 'student'
 
 export interface Workspace {
@@ -18,12 +18,22 @@ export interface Board {
   hasPassword: boolean
   locked: boolean
   layout: WallLayout
+  allowStudentPages: boolean
   createdAt: number
   updatedAt: number
 }
 
 export interface BoardSummary extends Board {
   activityCount: number
+}
+
+export interface WorkSnippet {
+  authorName: string
+  text: string
+}
+
+export interface ClassroomBoard extends BoardSummary {
+  works: WorkSnippet[]
 }
 
 export interface BoardMeta {
@@ -54,6 +64,7 @@ export interface Post {
 export interface CanvasItem {
   id: string
   boardId: string
+  pageId: string | null
   authorName: string
   clientId: string
   kind: ItemKind
@@ -63,7 +74,18 @@ export interface CanvasItem {
   w: number
   h: number
   color: string
+  fontSize: number
   z: number
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SandboxPage {
+  id: string
+  boardId: string
+  title: string
+  authorName: string
+  clientId: string
   createdAt: number
   updatedAt: number
 }
@@ -74,6 +96,7 @@ export interface JoinResponse {
   board: Board
   posts: Post[]
   items: CanvasItem[]
+  pages: SandboxPage[]
 }
 
 export interface StateResponse {
@@ -81,6 +104,7 @@ export interface StateResponse {
   board: Board
   posts: Post[]
   items: CanvasItem[]
+  pages: SandboxPage[]
 }
 
 export interface Person {
@@ -95,11 +119,26 @@ export type ServerMessage =
   | { type: 'post.deleted'; id: string }
   | { type: 'item.created'; item: CanvasItem }
   | { type: 'item.updated'; item: CanvasItem }
-  | { type: 'item.deleted'; id: string }
+  | { type: 'item.deleted'; id: string; pageId?: string | null }
+  | { type: 'page.created'; page: SandboxPage }
+  | { type: 'page.updated'; page: SandboxPage }
+  | { type: 'page.deleted'; id: string }
   | { type: 'board.updated'; board: Board }
   | { type: 'board.deleted' }
-  | { type: 'live'; entity: 'post' | 'item'; id: string; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'live'; entity: 'post' | 'item'; id: string; pageId?: string; x?: number; y?: number; w?: number; h?: number }
+
+export interface ItemCreate {
+  id: string
+  kind: ItemKind
+  x: number
+  y: number
+  w: number
+  h: number
+  color: string
+  text?: string
+  fontSize?: number
+}
 
 export type ClientMessage =
   | { type: 'presence'; name: string }
-  | { type: 'live'; entity: 'post' | 'item'; id: string; x?: number; y?: number; w?: number; h?: number }
+  | { type: 'live'; entity: 'post' | 'item'; id: string; pageId?: string; clientId?: string; x?: number; y?: number; w?: number; h?: number }

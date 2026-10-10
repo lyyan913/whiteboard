@@ -18,6 +18,7 @@ const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2 }[] = [
 function defaultSize(kind: ItemKind) {
   if (kind === 'text') return { w: 240, h: 88 }
   if (kind === 'sticky') return { w: 220, h: 170 }
+  if (kind === 'image') return { w: 320, h: 240 }
   return { w: 180, h: 140 }
 }
 
@@ -61,7 +62,22 @@ export function CanvasView({
   const [editing, setEditing] = useState<string | null>(null)
   const [draftText, setDraftText] = useState('')
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [hint, setHint] = useState(false)
   const canEdit = !locked || role === 'teacher'
+
+  useEffect(() => {
+    let seen = false
+    try {
+      seen = sessionStorage.getItem('tongchung.canvasHint') === '1'
+      if (!seen) sessionStorage.setItem('tongchung.canvasHint', '1')
+    } catch {
+      seen = false
+    }
+    if (seen) return
+    setHint(true)
+    const timer = window.setTimeout(() => setHint(false), 2000)
+    return () => window.clearTimeout(timer)
+  }, [])
   const colors = tool === 'text' ? TEXT_COLORS : NOTE_COLORS
   const colorLabels = tool === 'text' ? TEXT_COLOR_LABELS : NOTE_COLOR_LABELS
 
@@ -294,11 +310,17 @@ export function CanvasView({
 
   return (
     <div className="relative min-h-0 flex-1">
+      {hint && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow">
+          拖動貼文可以擺位
+        </div>
+      )}
       <div ref={viewportRef} className="canvas-grid absolute inset-0 overflow-hidden" onPointerDown={onBackgroundDown}>
         <div ref={worldRef} className="absolute left-0 top-0 origin-top-left">
           {ordered.map((item) => {
             const active = selected === item.id
             const isText = item.kind === 'text'
+            const isImage = item.kind === 'image'
             return (
               <div
                 key={item.id}
@@ -310,22 +332,24 @@ export function CanvasView({
                   width: item.w,
                   height: item.h,
                   zIndex: item.z,
-                  background: isText ? 'transparent' : item.color,
+                  background: isText || isImage ? 'transparent' : item.color,
                   color: isText ? item.color : '#2a2118',
                   borderRadius: item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 4 : 14,
                   border: item.kind === 'rect' ? '2px solid #2a2118' : undefined,
-                  boxShadow: isText ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
+                  boxShadow: isText || isImage ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
                 }}
                 onPointerDown={(event) => onNodeDown(event, item)}
                 onDoubleClick={(event) => {
                   event.stopPropagation()
-                  if (!canEdit) return
+                  if (!canEdit || isImage) return
                   setSelected(item.id)
                   setEditing(item.id)
                 }}
               >
                 {item.kind === 'sticky' && <span className="tape" aria-hidden />}
-                {editing === item.id ? (
+                {isImage ? (
+                  <img src={item.text} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />
+                ) : editing === item.id ? (
                   <textarea
                     autoFocus
                     value={draftText}
@@ -344,7 +368,7 @@ export function CanvasView({
                   <div
                     className={cn(
                       'h-full w-full overflow-auto whitespace-pre-wrap break-words p-3',
-                      isText ? 'text-xl font-medium' : 'text-[15px] leading-relaxed',
+                      isText ? 'text-xl font-medium' : 'text-lg leading-relaxed',
                       (item.kind === 'rect' || item.kind === 'ellipse') && 'grid place-items-center text-center',
                     )}
                   >
@@ -366,7 +390,7 @@ export function CanvasView({
                   <button
                     type="button"
                     aria-label="刪除"
-                    className="absolute -right-2 -top-2 grid h-8 w-8 place-items-center rounded-full bg-white text-stamp shadow"
+                    className="absolute -right-3 -top-3 grid h-11 w-11 place-items-center rounded-full bg-white text-danger shadow"
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => {
                       void onDelete(item.id)
@@ -389,11 +413,9 @@ export function CanvasView({
         {items.length === 0 && !draft && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center px-6 text-center">
             <div className="max-w-sm rounded-2xl bg-paper/95 p-5 shadow">
-              <p className="font-serif text-xl">{locked && role !== 'teacher' ? '畫布已鎖定' : '這塊畫布還是空的'}</p>
-              <p className="mt-2 text-sm leading-6 text-ink/70">
-                {locked && role !== 'teacher'
-                  ? '老師已鎖定這塊畫布，暫時只能觀看。'
-                  : '選擇下方工具，在空白處按一下或拖曳。拖動空白處可以移動畫布，滾輪可以縮放。'}
+              <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '畫布已鎖定' : '這塊畫布還是空的'}</p>
+              <p className="mt-2 text-base leading-7 text-muted">
+                {locked && role !== 'teacher' ? '而家只可以睇，未可以新貼。' : '喺下面揀工具，再喺空白處撳一下。'}
               </p>
             </div>
           </div>
@@ -431,7 +453,7 @@ export function CanvasView({
               aria-pressed={color === swatch}
               disabled={!canEdit}
               onClick={() => setColor(swatch)}
-              className={cn('h-7 w-7 rounded-full border-2', color === swatch ? 'border-ink' : 'border-white')}
+              className={cn('h-11 w-11 shrink-0 rounded-xl border-4', color === swatch ? 'border-ink' : 'border-white')}
               style={{ background: swatch }}
             />
           ))}
@@ -477,7 +499,7 @@ function IconButton({
   children: ReactNode
 }) {
   return (
-    <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="grid h-11 w-11 place-items-center rounded-xl hover:bg-cream disabled:opacity-40">
+    <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="grid h-[52px] w-[52px] shrink-0 place-items-center rounded-xl hover:bg-cream disabled:opacity-40">
       {children}
     </button>
   )

@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Board, BoardSummary, BoardType } from '../../shared/types'
 import { ApiError, api, getTeacherToken } from '@/lib/api'
-import { copyText, shareMessage } from '@/lib/share'
+import { boardUrl, copyText, shareMessage } from '@/lib/share'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -14,19 +14,20 @@ import { cn } from '@/lib/utils'
 function Alert({ message }: { message: string }) {
   if (!message) return null
   return (
-    <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm text-stamp">
+    <p role="alert" className="rounded-2xl bg-red-50 px-3 py-3 text-base text-danger">
       {message}
     </p>
   )
 }
 
 function TypePicker({ value, onChange }: { value: BoardType; onChange: (value: BoardType) => void }) {
-  const options: { id: BoardType; title: string; body: string }[] = [
-    { id: 'wall', title: '壁報板', body: '貼上文字、圖片或 YouTube，可以自由擺放或整齊排列。' },
-    { id: 'canvas', title: '互動畫布', body: '無限畫布上一起加便利貼、文字和簡單圖形。' },
+  const options: { id: BoardType; title: string; hint: string }[] = [
+    { id: 'wall', title: '壁報板（便利貼）', hint: '' },
+    { id: 'canvas', title: '互動畫布（全班同一塊）', hint: '' },
+    { id: 'sandbox', title: '作品集', hint: '共同畫布 · 多版面' },
   ]
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
+    <div className="grid gap-3">
       {options.map((option) => (
         <button
           key={option.id}
@@ -34,24 +35,27 @@ function TypePicker({ value, onChange }: { value: BoardType; onChange: (value: B
           aria-pressed={value === option.id}
           onClick={() => onChange(option.id)}
           className={cn(
-            'rounded-2xl border p-3 text-left',
-            value === option.id ? 'border-stamp bg-stamp/5 ring-2 ring-stamp' : 'border-line bg-white',
+            'min-h-28 rounded-2xl border p-4 text-left text-xl font-semibold',
+            value === option.id ? 'border-stamp bg-stamp/5 ring-2 ring-stamp' : 'border-line bg-paper',
           )}
         >
-          <div className="font-semibold">{option.title}</div>
-          <p className="mt-1 text-sm leading-5 text-ink/70">{option.body}</p>
+          {option.title}
+          {option.hint && <span className="mt-1 block text-base font-medium text-muted">{option.hint}</span>}
         </button>
       ))}
+      {value === 'sandbox' && <p className="text-base text-muted">老師先開幾個版面。學生開同一條連結，揀版面，小組一齊貼成果。</p>}
     </div>
   )
 }
 
 export function CreateBoardDialog({
   open,
+  classroomId,
   onOpenChange,
   onCreated,
 }: {
   open: boolean
+  classroomId?: string
   onOpenChange: (open: boolean) => void
   onCreated: (board: BoardSummary) => void
 }) {
@@ -62,6 +66,8 @@ export function CreateBoardDialog({
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [created, setCreated] = useState<BoardSummary | null>(null)
+  const [advanced, setAdvanced] = useState(false)
+  const [copiedLink, setCopiedLink] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -73,6 +79,8 @@ export function CreateBoardDialog({
       setError('')
       setSaving(false)
       setCreated(null)
+      setAdvanced(false)
+      setCopiedLink(false)
     }
   }, [open])
 
@@ -107,48 +115,108 @@ export function CreateBoardDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         {created ? (
-          <ShareBody
-            board={created}
-            password={password}
-            title="壁報已建立"
-            description="請現在把連結和密碼交給學生。密碼之後不能再查看，忘記可在設定重設。"
-            extra={
-              <Button type="button" onClick={() => navigate(`/b/${created.id}`)}>
-                開啟這塊壁報
+          created.type === 'sandbox' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>作品集已建立</DialogTitle>
+                <DialogDescription>學生開呢條連結，揀版面，小組一齊貼成果。</DialogDescription>
+              </DialogHeader>
+              <p className="break-all rounded-2xl bg-cream px-4 py-4 text-lg font-semibold text-sky">{boardUrl(created.id)}</p>
+              <Button
+                type="button"
+                size="lg"
+                className="w-full"
+                onClick={() => {
+                  void copyText(boardUrl(created.id)).then((ok) => {
+                    if (!ok) return
+                    setCopiedLink(true)
+                    window.setTimeout(() => setCopiedLink(false), 2000)
+                  })
+                }}
+              >
+                {copiedLink ? '已複製' : '複製連結'}
               </Button>
-            }
-          />
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                className="w-full"
+                onClick={() => navigate(classroomId ? `/b/${created.id}?room=${classroomId}` : `/b/${created.id}`)}
+              >
+                打開作品集
+              </Button>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>已加入這個課室</DialogTitle>
+                <DialogDescription>學生打開課室連結，就睇到這塊板和其他人的作品。</DialogDescription>
+              </DialogHeader>
+              <Button type="button" size="lg" className="w-full" onClick={() => onOpenChange(false)}>
+                完成
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                className="mt-2 w-full"
+                onClick={() => navigate(classroomId ? `/b/${created.id}?room=${classroomId}` : `/b/${created.id}`)}
+              >
+                打開壁報
+              </Button>
+            </>
+          )
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>新增壁報</DialogTitle>
-              <DialogDescription>每塊壁報有自己的連結。組別用來標示第1組、第2組，學生不用登入。</DialogDescription>
+              <DialogTitle>新建壁報</DialogTitle>
+              <DialogDescription>加喺這個課室。學生用同一條課室連結就睇到。</DialogDescription>
             </DialogHeader>
-            <form className="space-y-4" onSubmit={(event) => void submit(event)}>
+            <form className="space-y-5" onSubmit={(event) => void submit(event)}>
               <div className="space-y-2">
-                <Label htmlFor="board-title">壁報標題</Label>
+                <Label htmlFor="board-title">① 叫咩名？</Label>
                 <Input id="board-title" value={title} maxLength={40} placeholder="例如：校園植物觀察" onChange={(event) => setTitle(event.target.value)} />
               </div>
-              <TypePicker value={type} onChange={setType} />
               <div className="space-y-2">
-                <Label htmlFor="group-label">組別（選填）</Label>
-                <Input id="group-label" value={groupLabel} maxLength={20} placeholder="例如：第1組" onChange={(event) => setGroupLabel(event.target.value)} />
+                <p className="text-base font-semibold">② 邊種板？</p>
+                <TypePicker value={type} onChange={setType} />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="student-password">學生密碼（選填）</Label>
-                <Input
-                  id="student-password"
-                  type="text"
-                  autoComplete="off"
-                  value={password}
-                  maxLength={32}
-                  placeholder="留空表示知道連結的人都可以進入"
-                  onChange={(event) => setPassword(event.target.value)}
-                />
+              <div>
+                <button
+                  type="button"
+                  className="flex min-h-[52px] w-full items-center text-left text-base font-semibold text-sky"
+                  aria-expanded={advanced}
+                  onClick={() => setAdvanced((value) => !value)}
+                >
+                  ③ {advanced ? '收起進階' : '進階（可摺埋）'}
+                </button>
+                {advanced && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="group-label">組別名稱</Label>
+                      <Input id="group-label" value={groupLabel} maxLength={20} placeholder="例如：第1組" onChange={(event) => setGroupLabel(event.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="student-password">學生密碼</Label>
+                      <Input
+                        id="student-password"
+                        type="text"
+                        autoComplete="off"
+                        value={password}
+                        maxLength={32}
+                        placeholder="可留空"
+                        onChange={(event) => setPassword(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
               <Alert message={error} />
               <Button type="submit" size="lg" disabled={saving} className="w-full">
-                {saving ? '建立中…' : '建立壁報'}
+                {saving ? '請稍等…' : '建立壁報'}
+              </Button>
+              <Button type="button" variant="outline" size="lg" className="w-full" onClick={() => onOpenChange(false)}>
+                取消
               </Button>
             </form>
           </>
@@ -176,6 +244,7 @@ export function BoardSettingsDialog({
   const [password, setPassword] = useState('')
   const [clearPassword, setClearPassword] = useState(false)
   const [locked, setLocked] = useState(false)
+  const [studentPages, setStudentPages] = useState(false)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -188,6 +257,7 @@ export function BoardSettingsDialog({
     setPassword('')
     setClearPassword(false)
     setLocked(board.locked)
+    setStudentPages(board.allowStudentPages)
     setError('')
     setConfirming(false)
     setRevealed('')
@@ -217,6 +287,7 @@ export function BoardSettingsDialog({
           title: title.trim(),
           groupLabel: groupLabel.trim(),
           locked,
+          allowStudentPages: studentPages,
           ...(clearPassword ? { clearPassword: true } : {}),
           ...(password ? { password } : {}),
         }),
@@ -249,10 +320,10 @@ export function BoardSettingsDialog({
       <DialogContent>
         {revealed ? (
           <ShareBody
-            board={{ id: board.id, title, groupLabel: groupLabel.trim() || null }}
+            board={{ id: board.id, title, groupLabel: groupLabel.trim() || null, type: board.type }}
             password={revealed}
             title="新密碼已設定"
-            description="請現在抄給學生。關閉後不能再查看這組密碼。"
+            description="而家抄低密碼。關閉後唔會再顯示。"
           />
         ) : confirming ? (
           <>
@@ -261,12 +332,12 @@ export function BoardSettingsDialog({
               <DialogDescription>「{board.title}」和裡面的貼文會一併刪除，已分享的連結會失效。</DialogDescription>
             </DialogHeader>
             <Alert message={error} />
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setConfirming(false)}>
+              <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" size="lg" onClick={() => setConfirming(false)}>
                 返回
               </Button>
-              <Button type="button" variant="destructive" disabled={saving} onClick={() => void remove()}>
-                {saving ? '刪除中…' : '確定刪除'}
+              <Button type="button" variant="destructive" size="lg" disabled={saving} onClick={() => void remove()}>
+                {saving ? '請稍等…' : '確定刪除'}
               </Button>
             </div>
           </>
@@ -274,7 +345,9 @@ export function BoardSettingsDialog({
           <>
             <DialogHeader>
               <DialogTitle>壁報設定</DialogTitle>
-              <DialogDescription>可以改名稱、組別、密碼，或鎖定後只讓學生觀看。</DialogDescription>
+              <DialogDescription>
+                {board.type === 'sandbox' ? '可以改名稱、組別、密碼，暫停編輯，或者開放學生開新版面。' : '可以改名稱、組別、密碼，或鎖定後只讓學生觀看。'}
+              </DialogDescription>
             </DialogHeader>
             <form className="space-y-4" onSubmit={(event) => void save(event)}>
               <div className="space-y-2">
@@ -304,20 +377,31 @@ export function BoardSettingsDialog({
                   移除密碼，之後只憑連結即可進入
                 </label>
               )}
-              <div className="flex items-center justify-between gap-4 rounded-xl border border-line px-3 py-3">
+              <div className="flex min-h-[52px] items-center justify-between gap-4 rounded-2xl border border-line px-3 py-3">
                 <div>
-                  <div className="font-medium">鎖定壁報</div>
-                  <p className="text-sm text-ink/65">鎖定後學生只能觀看，不能新增或移動。</p>
+                  <div className="text-base font-semibold">{board.type === 'sandbox' ? '暫停編輯' : '鎖定壁報'}</div>
+                  <p className="text-base text-muted">
+                    {board.type === 'sandbox' ? '學生只可以睇，未可以改版面入面嘅內容。' : '鎖定後學生只能觀看，不能新增或移動。'}
+                  </p>
                 </div>
-                <Switch checked={locked} onCheckedChange={setLocked} aria-label="鎖定壁報" />
+                <Switch checked={locked} onCheckedChange={setLocked} aria-label={board.type === 'sandbox' ? '暫停編輯' : '鎖定壁報'} />
               </div>
+              {board.type === 'sandbox' && (
+                <div className="flex min-h-[52px] items-center justify-between gap-4 rounded-2xl border border-line px-3 py-3">
+                  <div>
+                    <div className="text-base font-semibold">學生可開新版面</div>
+                    <p className="text-base text-muted">預設關。開咗之後，學生先見到「＋ 新版面」，亦可以改名同刪除自己開嘅版面。</p>
+                  </div>
+                  <Switch checked={studentPages} onCheckedChange={setStudentPages} aria-label="學生可開新版面" />
+                </div>
+              )}
               <Alert message={error} />
               <div className="flex flex-wrap justify-between gap-2">
                 <Button type="button" variant="destructive" onClick={() => setConfirming(true)}>
                   刪除
                 </Button>
-                <Button type="submit" disabled={saving}>
-                  {saving ? '儲存中…' : '儲存'}
+                <Button type="submit" size="lg" disabled={saving}>
+                  {saving ? '請稍等…' : '儲存'}
                 </Button>
               </div>
             </form>
@@ -334,7 +418,7 @@ export function ShareDialog({
   open,
   onOpenChange,
 }: {
-  board: { id: string; title: string; groupLabel: string | null } | null
+  board: { id: string; title: string; groupLabel: string | null; type?: BoardType } | null
   password?: string
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -343,16 +427,7 @@ export function ShareDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <ShareBody
-          board={board}
-          password={password}
-          title="分享給學生"
-          description={
-            password
-              ? '把下面的訊息交給這一組。'
-              : '如果這塊壁報設了密碼，請用你告訴學生的那一組。密碼不會再顯示，忘記可在設定重設。'
-          }
-        />
+        <ShareBody board={board} password={password} title="分享俾學生" description="" />
       </DialogContent>
     </Dialog>
   )
@@ -365,39 +440,84 @@ function ShareBody({
   description,
   extra,
 }: {
-  board: { id: string; title: string; groupLabel: string | null }
+  board: { id: string; title: string; groupLabel: string | null; hasPassword?: boolean; type?: BoardType }
   password?: string
   title: string
   description: string
   extra?: ReactNode
 }) {
+  const url = boardUrl(board.id)
   const message = shareMessage(board, password)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'link' | 'password' | 'all' | null>(null)
+
+  function flash(kind: 'link' | 'password' | 'all') {
+    setCopied(kind)
+    window.setTimeout(() => setCopied(null), 2000)
+  }
 
   return (
     <>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
+        {description ? (
+          <DialogDescription>{description}</DialogDescription>
+        ) : (
+          <DialogDescription className="sr-only">投影呢個畫面，叫學生掃／開連結。</DialogDescription>
+        )}
       </DialogHeader>
-      <textarea readOnly value={message} rows={6} className="w-full rounded-xl border border-line bg-cream px-3 py-2 text-sm" />
-      <div className="mt-4 flex flex-wrap justify-end gap-2">
-        {extra}
+      <p className="mb-3 text-lg font-semibold">投影呢個畫面，叫學生掃／開連結。</p>
+      {board.type === 'sandbox' && <p className="mb-3 text-lg">學生開呢條連結，揀版面，小組一齊貼成果。</p>}
+      <div className="space-y-3">
+        <p className="text-base font-semibold">① 學生連結</p>
+        <p className="break-all rounded-2xl bg-cream px-4 py-4 text-lg font-semibold text-sky">{url}</p>
         <Button
           type="button"
-          variant="secondary"
+          size="lg"
+          className="w-full"
           onClick={() => {
-            void copyText(message).then((ok) => {
-              if (ok) {
-                setCopied(true)
-                window.setTimeout(() => setCopied(false), 2000)
-              }
+            void copyText(url).then((ok) => {
+              if (ok) flash('link')
             })
           }}
         >
-          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-          {copied ? '已複製' : '複製訊息'}
+          {copied === 'link' ? <Check className="h-5 w-5" /> : <Copy className="h-5 w-5" />}
+          {copied === 'link' ? '已複製' : '複製連結'}
         </Button>
+        {password ? (
+          <>
+            <p className="text-base font-semibold">② 學生密碼</p>
+            <p className="rounded-2xl border border-line px-4 py-4 text-center text-3xl font-bold tracking-wide">{password}</p>
+            <Button
+              type="button"
+              size="lg"
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                void copyText(password).then((ok) => {
+                  if (ok) flash('password')
+                })
+              }}
+            >
+              {copied === 'password' ? '已複製' : '複製密碼'}
+            </Button>
+          </>
+        ) : (
+          <p className="text-base text-muted">
+            {board.hasPassword ? '學生密碼已設定。呢度唔會再顯示，忘記可以喺設定重設。' : '未設學生密碼，打開連結就可以入。'}
+          </p>
+        )}
+        <button
+          type="button"
+          className="min-h-[52px] w-full text-base font-semibold text-sky"
+          onClick={() => {
+            void copyText(message).then((ok) => {
+              if (ok) flash('all')
+            })
+          }}
+        >
+          {copied === 'all' ? '已複製' : '複製全部訊息'}
+        </button>
+        {extra}
       </div>
     </>
   )

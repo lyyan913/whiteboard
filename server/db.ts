@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import type { Board, BoardSummary, BoardType, CanvasItem, ItemKind, Post, PostKind, WallLayout, Workspace } from '../shared/types'
+import type { Board, BoardSummary, BoardType, CanvasItem, ItemKind, Post, PostKind, SandboxPage, WallLayout, Workspace } from '../shared/types'
 import { makeId } from '../shared/text'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -73,6 +73,31 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_items_board ON canvas_items(board_id);
 `)
 
+const itemColumns = db.prepare('PRAGMA table_info(canvas_items)').all() as { name: string }[]
+if (!itemColumns.some((column) => column.name === 'page_id')) {
+  db.exec('ALTER TABLE canvas_items ADD COLUMN page_id TEXT')
+}
+if (!itemColumns.some((column) => column.name === 'font_size')) {
+  db.exec('ALTER TABLE canvas_items ADD COLUMN font_size INTEGER')
+}
+const boardColumns = db.prepare('PRAGMA table_info(boards)').all() as { name: string }[]
+if (!boardColumns.some((column) => column.name === 'allow_student_pages')) {
+  db.exec('ALTER TABLE boards ADD COLUMN allow_student_pages INTEGER NOT NULL DEFAULT 0')
+}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sandbox_pages (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_pages_board ON sandbox_pages(board_id);
+  CREATE INDEX IF NOT EXISTS idx_items_page ON canvas_items(page_id);
+`)
+
 type WorkspaceRow = { id: string; name: string; pin_hash: string; created_at: number | bigint }
 type BoardRow = {
   id: string
@@ -82,6 +107,7 @@ type BoardRow = {
   group_label: string | null
   password_hash: string | null
   locked: number | bigint
+  allow_student_pages?: number | bigint
   layout: string
   created_at: number | bigint
   updated_at: number | bigint
@@ -105,6 +131,7 @@ type PostRow = {
 type ItemRow = {
   id: string
   board_id: string
+  page_id: string | null
   author_name: string
   client_id: string
   kind: string
@@ -114,7 +141,17 @@ type ItemRow = {
   w: number
   h: number
   color: string
+  font_size: number | bigint | null
   z: number | bigint
+  created_at: number | bigint
+  updated_at: number | bigint
+}
+type PageRow = {
+  id: string
+  board_id: string
+  title: string
+  author_name: string
+  client_id: string
   created_at: number | bigint
   updated_at: number | bigint
 }
@@ -150,14 +187,20 @@ export function createWorkspace(name: string, pinHash: string) {
   return getWorkspace(id)!
 }
 
+function boardType(value: string): BoardType {
+  if (value === 'canvas' || value === 'sandbox') return value
+  return 'wall'
+}
+
 function mapBoard(row: BoardRow): Board {
   return {
     id: row.id,
     title: row.title,
-    type: row.type === 'canvas' ? 'canvas' : 'wall',
+    type: boardType(row.type),
     groupLabel: row.group_label,
     hasPassword: Boolean(row.password_hash),
     locked: num(row.locked) === 1,
+    allowStudentPages: num(row.allow_student_pages) === 1,
     layout: row.layout === 'grid' ? 'grid' : 'free',
     createdAt: num(row.created_at),
     updatedAt: num(row.updated_at),
@@ -173,11 +216,54 @@ export function getBoard(id: string) {
   return row ? mapBoard(row) : undefined
 }
 
+export function listWorkSnippets(workspaceId: string) {
+  const posts = many<{ board_id: string; author_name: string; body: string; kind: string }>(
+    `SELECT p.board_id, p.author_name, p.body, p.kind
+     FROM posts p
+     JOIN boards b ON b.id = p.board_id
+     WHERE b.workspace_id = ?
+     ORDER BY p.created_at DESC`,
+    workspaceId,
+  )
+  const items = many<{ board_id: string; author_name: string; text: string }>(
+    `SELECT c.board_id, c.author_name, c.text
+     FROM canvas_items c
+     JOIN boards b ON b.id = c.board_id
+     WHERE b.workspace_id = ? AND c.page_id IS NULL AND c.text != ''
+     ORDER BY c.created_at DESC`,
+    workspaceId,
+  )
+  const pages = many<{ board_id: string; author_name: string; title: string }>(
+    `SELECT s.board_id, s.author_name, s.title
+     FROM sandbox_pages s
+     JOIN boards b ON b.id = s.board_id
+     WHERE b.workspace_id = ?
+     ORDER BY s.created_at DESC`,
+    workspaceId,
+  )
+  const grouped = new Map<string, { authorName: string; text: string }[]>()
+  function push(boardId: string, authorName: string, text: string) {
+    const list = grouped.get(boardId) ?? []
+    const line = text.replace(/\s+/g, ' ').trim()
+    if (!line || list.length >= 3) return
+    list.push({ authorName, text: line.slice(0, 42) })
+    grouped.set(boardId, list)
+  }
+  for (const post of posts) {
+    const text = post.body || (post.kind === 'image' ? '圖片' : post.kind === 'youtube' ? 'YouTube' : '')
+    push(post.board_id, post.author_name, text)
+  }
+  for (const item of items) push(item.board_id, item.author_name, item.text)
+  for (const page of pages) push(page.board_id, page.author_name, page.title || '版面')
+  return grouped
+}
+
 export function listBoards(workspaceId: string): BoardSummary[] {
   const rows = many<BoardRow>(
     `SELECT b.*,
       (SELECT COUNT(*) FROM posts p WHERE p.board_id = b.id) +
-      (SELECT COUNT(*) FROM canvas_items c WHERE c.board_id = b.id) AS activity_count
+      (SELECT COUNT(*) FROM canvas_items c WHERE c.board_id = b.id AND c.page_id IS NULL) +
+      (SELECT COUNT(*) FROM sandbox_pages s WHERE s.board_id = b.id) AS activity_count
      FROM boards b
      WHERE b.workspace_id = ?
      ORDER BY b.updated_at DESC`,
@@ -216,6 +302,7 @@ export function updateBoard(
     groupLabel?: string | null
     passwordHash?: string | null
     locked?: boolean
+    allowStudentPages?: boolean
     layout?: WallLayout
     clearPassword?: boolean
   },
@@ -226,18 +313,20 @@ export function updateBoard(
   const groupLabel = patch.groupLabel === undefined ? current.group_label : patch.groupLabel
   const passwordHash = patch.clearPassword ? null : patch.passwordHash === undefined ? current.password_hash : patch.passwordHash
   const locked = patch.locked === undefined ? num(current.locked) : patch.locked ? 1 : 0
+  const allowStudentPages = patch.allowStudentPages === undefined ? num(current.allow_student_pages) : patch.allowStudentPages ? 1 : 0
   const layout = patch.layout ?? (current.layout === 'grid' ? 'grid' : 'free')
   db.prepare(
     `UPDATE boards
-     SET title = ?, group_label = ?, password_hash = ?, locked = ?, layout = ?, updated_at = ?
+     SET title = ?, group_label = ?, password_hash = ?, locked = ?, allow_student_pages = ?, layout = ?, updated_at = ?
      WHERE id = ?`,
-  ).run(title, groupLabel, passwordHash, locked, layout, Date.now(), id)
+  ).run(title, groupLabel, passwordHash, locked, allowStudentPages, layout, Date.now(), id)
   return getBoard(id)
 }
 
 export function deleteBoard(id: string) {
   db.prepare('DELETE FROM posts WHERE board_id = ?').run(id)
   db.prepare('DELETE FROM canvas_items WHERE board_id = ?').run(id)
+  db.prepare('DELETE FROM sandbox_pages WHERE board_id = ?').run(id)
   db.prepare('DELETE FROM boards WHERE id = ?').run(id)
 }
 
@@ -275,8 +364,28 @@ function mapItem(row: ItemRow): CanvasItem {
     y: row.y,
     w: row.w,
     h: row.h,
+    pageId: row.page_id,
     color: row.color,
+    fontSize: fontSizeOf(row.font_size),
     z: num(row.z),
+    createdAt: num(row.created_at),
+    updatedAt: num(row.updated_at),
+  }
+}
+
+function fontSizeOf(value: number | bigint | null | undefined) {
+  const size = num(value ?? 0)
+  if (size === 18 || size === 28 || size === 40) return size
+  return 28
+}
+
+function mapPage(row: PageRow): SandboxPage {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    title: row.title,
+    authorName: row.author_name,
+    clientId: row.client_id,
     createdAt: num(row.created_at),
     updatedAt: num(row.updated_at),
   }
@@ -287,7 +396,58 @@ export function listPosts(boardId: string) {
 }
 
 export function listItems(boardId: string) {
+  return many<ItemRow>('SELECT * FROM canvas_items WHERE board_id = ? AND page_id IS NULL ORDER BY z ASC, created_at ASC', boardId).map(mapItem)
+}
+
+export function listAllItems(boardId: string) {
   return many<ItemRow>('SELECT * FROM canvas_items WHERE board_id = ? ORDER BY z ASC, created_at ASC', boardId).map(mapItem)
+}
+
+export function listPages(boardId: string) {
+  return many<PageRow>('SELECT * FROM sandbox_pages WHERE board_id = ? ORDER BY created_at ASC', boardId).map(mapPage)
+}
+
+export function getPage(boardId: string, pageId: string) {
+  const row = one<PageRow>('SELECT * FROM sandbox_pages WHERE board_id = ? AND id = ?', boardId, pageId)
+  return row ? mapPage(row) : undefined
+}
+
+export function insertPage(page: SandboxPage) {
+  db.prepare(
+    `INSERT INTO sandbox_pages (id, board_id, title, author_name, client_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(page.id, page.boardId, page.title, page.authorName, page.clientId, page.createdAt, page.updatedAt)
+  touchBoard(page.boardId)
+  return getPage(page.boardId, page.id)!
+}
+
+export function countPages(boardId: string) {
+  return num(one<{ n: number | bigint }>('SELECT COUNT(*) AS n FROM sandbox_pages WHERE board_id = ?', boardId)?.n)
+}
+
+export function updatePageTitle(boardId: string, pageId: string, title: string) {
+  db.prepare('UPDATE sandbox_pages SET title = ?, updated_at = ? WHERE board_id = ? AND id = ?').run(title, Date.now(), boardId, pageId)
+  touchBoard(boardId)
+  return getPage(boardId, pageId)!
+}
+
+export function deletePage(boardId: string, pageId: string) {
+  db.prepare('DELETE FROM canvas_items WHERE board_id = ? AND page_id = ?').run(boardId, pageId)
+  db.prepare('DELETE FROM sandbox_pages WHERE board_id = ? AND id = ?').run(boardId, pageId)
+  touchBoard(boardId)
+}
+
+export function listPageItems(boardId: string, pageId: string) {
+  return many<ItemRow>('SELECT * FROM canvas_items WHERE board_id = ? AND page_id = ? ORDER BY z ASC, created_at ASC', boardId, pageId).map(mapItem)
+}
+
+export function countPageItems(pageId: string) {
+  return num(one<{ n: number | bigint }>('SELECT COUNT(*) AS n FROM canvas_items WHERE page_id = ?', pageId)?.n)
+}
+
+export function nextPageZ(pageId: string) {
+  const row = one<{ z: number | bigint }>('SELECT COALESCE(MAX(z), 0) AS z FROM canvas_items WHERE page_id = ?', pageId)
+  return num(row?.z) + 1
 }
 
 export function countPosts(boardId: string) {
@@ -364,11 +524,12 @@ export function removePost(boardId: string, postId: string) {
 
 export function insertItem(item: CanvasItem) {
   db.prepare(
-    `INSERT INTO canvas_items (id, board_id, author_name, client_id, kind, text, x, y, w, h, color, z, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO canvas_items (id, board_id, page_id, author_name, client_id, kind, text, x, y, w, h, color, font_size, z, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     item.id,
     item.boardId,
+    item.pageId,
     item.authorName,
     item.clientId,
     item.kind,
@@ -378,6 +539,7 @@ export function insertItem(item: CanvasItem) {
     item.w,
     item.h,
     item.color,
+    item.fontSize,
     item.z,
     item.createdAt,
     item.updatedAt,
@@ -389,9 +551,9 @@ export function insertItem(item: CanvasItem) {
 export function saveItem(item: CanvasItem) {
   db.prepare(
     `UPDATE canvas_items
-     SET text = ?, x = ?, y = ?, w = ?, h = ?, color = ?, z = ?, updated_at = ?
+     SET text = ?, x = ?, y = ?, w = ?, h = ?, color = ?, font_size = ?, z = ?, updated_at = ?
      WHERE board_id = ? AND id = ?`,
-  ).run(item.text, item.x, item.y, item.w, item.h, item.color, item.z, Date.now(), item.boardId, item.id)
+  ).run(item.text, item.x, item.y, item.w, item.h, item.color, item.fontSize, item.z, Date.now(), item.boardId, item.id)
   touchBoard(item.boardId)
   return getItem(item.boardId, item.id)!
 }

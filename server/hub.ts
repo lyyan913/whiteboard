@@ -3,7 +3,7 @@ import type { Server } from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { ClientMessage, Person, Role, ServerMessage } from '../shared/types'
 import { verifyToken } from './auth'
-import { getBoardRow } from './db'
+import { getBoardRow, getPage } from './db'
 import { makeId } from '../shared/text'
 
 type Client = {
@@ -121,13 +121,22 @@ export function attachWebsocket(server: Server) {
       if (message.type === 'live') {
         const current = getBoardRow(client.boardId)
         if (!current) return
-        if (Number(current.locked) === 1 && client.role !== 'teacher') return
         if (message.entity !== 'post' && message.entity !== 'item') return
         if (typeof message.id !== 'string' || message.id.length > 40) return
+        const pageId = typeof message.pageId === 'string' && message.pageId.length <= 40 ? message.pageId : undefined
+        if (current.type === 'sandbox') {
+          if (!pageId) return
+          const page = getPage(client.boardId, pageId)
+          if (!page) return
+          if (Number(current.locked) === 1 && client.role !== 'teacher') return
+        } else if (Number(current.locked) === 1 && client.role !== 'teacher') {
+          return
+        }
         const live: ServerMessage = {
           type: 'live',
           entity: message.entity,
           id: message.id,
+          pageId,
           x: clampCoord(message.x),
           y: clampCoord(message.y),
           w: clampCoord(message.w),

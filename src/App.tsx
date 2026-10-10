@@ -2,6 +2,7 @@ import { Component, type ReactNode } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { Logo } from '@/components/Logo'
 import { BoardPage } from '@/pages/BoardPage'
+import { ClassroomPage } from '@/pages/ClassroomPage'
 import { HomePage } from '@/pages/HomePage'
 
 export default function App() {
@@ -10,6 +11,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/c/:workspaceId" element={<ClassroomPage />} />
           <Route path="/b/:boardId" element={<BoardPage />} />
           <Route
             path="*"

@@ -9,7 +9,7 @@ export function Logo({ light = false, compact = false }: { light?: boolean; comp
       {!compact && (
         <div className={cn('leading-tight', light ? 'text-white' : 'text-ink')}>
           <div className="font-serif text-lg font-bold">同窗</div>
-          <div className={cn('text-xs', light ? 'text-white/75' : 'text-ink/60')}>課堂協作壁報</div>
+          <div className={cn('text-sm', light ? 'text-white/80' : 'text-muted')}>課堂壁報板</div>
         </div>
       )}
     </div>
