@@ -304,6 +304,8 @@ function Filmstrip({
   )
 }
 
+const PAGE_TONES = ['#e07b24', '#1f7a54', '#1d4e89', '#6b4c9a', '#d6457a', '#c99a06']
+
 function CardButton({
   page,
   index,
@@ -327,6 +329,7 @@ function CardButton({
 }) {
   const ref = useRef<HTMLButtonElement>(null)
   const hold = useRef(0)
+  const tone = PAGE_TONES[index % PAGE_TONES.length]
   useEffect(() => {
     if (active) ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [active])
@@ -361,26 +364,30 @@ function CardButton({
         window.addEventListener('pointerup', up)
       }}
       className={cn(
-        'flex shrink-0 flex-col items-center gap-1 rounded-2xl border-2 p-1.5 text-center',
+        'thumb-card flex shrink-0 flex-col items-center gap-1 rounded-2xl border-[3px] bg-white p-1.5 text-center',
         horizontal ? 'min-h-[92px] w-[104px]' : 'mb-2 w-full',
-        active ? 'border-stamp bg-paper' : 'border-transparent bg-transparent',
+        active ? 'border-stamp shadow-[0_0_0_4px_rgba(196,73,44,.18)]' : 'border-transparent',
       )}
     >
-      <CardThumb items={preview} />
+      <CardThumb items={preview} tone={tone} />
       <span className="text-base font-bold leading-none text-stamp">{cardNo(index)}</span>
-      <span className="w-full truncate text-sm font-semibold leading-tight">{shortName(page.title)}</span>
+      <span className="flex w-full min-w-0 items-center justify-center gap-1 px-1">
+        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: tone }} />
+        <span className="truncate text-sm font-semibold leading-tight">{shortName(page.title)}</span>
+      </span>
       <span className="text-xs text-muted">{count} 件</span>
     </button>
   )
 }
 
-function CardThumb({ items }: { items: CanvasItem[] }) {
+function CardThumb({ items, tone }: { items: CanvasItem[]; tone: string }) {
   const bounds = cardBounds(items)
   const width = 112
   const height = Math.max(64, Math.round((width * bounds.h) / bounds.w))
   const scale = width / bounds.w
   return (
-    <span className="relative block overflow-hidden rounded-md bg-white shadow-sm ring-1 ring-line" style={{ width, height }}>
+    <span className="relative block overflow-hidden rounded-lg bg-[#fbf5ea] shadow-sm ring-1 ring-[rgba(31,26,20,.08)]" style={{ width, height }}>
+      <span aria-hidden className="absolute inset-y-0 left-0 z-10 w-1.5" style={{ background: tone }} />
       <span
         className="absolute left-0 top-0 block"
         style={{ width: bounds.w, height: bounds.h, transform: `scale(${scale})`, transformOrigin: 'top left' }}
@@ -424,7 +431,7 @@ function AddCardButton({ onClick, compact = false }: { onClick: () => void; comp
       type="button"
       onClick={onClick}
       className={cn(
-        'flex shrink-0 items-center justify-center rounded-2xl bg-stamp font-semibold text-white',
+        'pressable flex shrink-0 items-center justify-center rounded-2xl bg-stamp font-semibold text-white',
         compact ? 'min-h-[92px] min-w-[92px] px-3 text-base' : 'min-h-14 w-full px-2 text-base',
       )}
     >

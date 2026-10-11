@@ -7,20 +7,23 @@ import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
 import { makeId } from '../../shared/text'
 import { Markup } from '@/components/Markup'
 import { CARD_H, CARD_W, cardBounds, clampToCard } from '@/components/cardFrame'
-import { cn } from '@/lib/utils'
+import { useAppearIds } from '@/lib/useAppearIds'
+import { cn, polaroidTilt } from '@/lib/utils'
 
 type Tool = 'select' | 'text' | 'sticky' | 'pen' | 'arrow' | 'image' | ShapeKind
 type ShapeKind = 'rect' | 'ellipse' | 'star' | 'heart' | 'triangle' | 'cloud' | 'bubble'
 type Corner = 'nw' | 'ne' | 'sw' | 'se'
 
-const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2 }[] = [
-  { id: 'select', label: '揀', icon: MousePointer2 },
-  { id: 'pen', label: '畫筆', icon: Pencil },
-  { id: 'text', label: '文字', icon: Type },
-  { id: 'sticky', label: '便利貼', icon: StickyNote },
-  { id: 'rect', label: '圖形', icon: Shapes },
-  { id: 'arrow', label: '箭咀', icon: ArrowUpRight },
+const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2; tone: string }[] = [
+  { id: 'select', label: '揀', icon: MousePointer2, tone: '#1f1a14' },
+  { id: 'pen', label: '畫筆', icon: Pencil, tone: '#c4492c' },
+  { id: 'text', label: '文字', icon: Type, tone: '#1d4e89' },
+  { id: 'sticky', label: '便利貼', icon: StickyNote, tone: '#c99a06' },
+  { id: 'rect', label: '圖形', icon: Shapes, tone: '#e07b24' },
+  { id: 'arrow', label: '箭咀', icon: ArrowUpRight, tone: '#6b4c9a' },
 ]
+
+const SHAPE_TONE = '#e07b24'
 
 const SHAPES: { id: ShapeKind; label: string; icon: typeof Square }[] = [
   { id: 'rect', label: '方形', icon: Square },
@@ -110,6 +113,7 @@ export function CardCanvas({
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const canEdit = !locked || role === 'teacher'
   const selectedItem = items.find((item) => item.id === selected) ?? null
+  const appear = useAppearIds(items.map((item) => item.id).join('\u0001'), pageId)
 
   useEffect(() => {
     setSelected(null)
@@ -413,16 +417,15 @@ export function CardCanvas({
 
   const ordered = [...items].sort((a, b) => a.z - b.z || a.createdAt - b.createdAt)
   const handle = Math.max(28, 44 / scale)
-  const ring = 3 / scale
 
   const shapeOpen = isShapeKind(tool)
   const inkOpen = tool === 'pen' || tool === 'arrow' || shapeOpen
   const liveInk = ink && ink.length > 1 ? inkFrame(ink, 0) : null
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-cream">
+    <div className="relative flex min-h-0 flex-1 flex-col bg-cream">
       <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-auto">
-        <div className={cn('flex min-h-full min-w-full items-center justify-center p-3', ready ? 'card-in' : 'opacity-0')}>
+        <div key={pageId} className={cn('flex min-h-full min-w-full items-center justify-center p-3', ready ? 'page-fade' : 'opacity-0')}>
           <div style={{ width: bounds.w * scale, height: bounds.h * scale }}>
             <div
               ref={worldRef}
@@ -432,9 +435,21 @@ export function CardCanvas({
               onPointerDown={onCardPointerDown}
             >
               <div
-                className="absolute rounded-sm bg-white shadow-[0_18px_50px_rgba(70,36,8,0.16)]"
-                style={{ left: -bounds.minX, top: -bounds.minY, width: CARD_W, height: CARD_H }}
-              />
+                className="canvas-sheet absolute overflow-hidden"
+                style={{
+                  left: -bounds.minX,
+                  top: -bounds.minY,
+                  width: CARD_W,
+                  height: CARD_H,
+                  borderRadius: 20 / scale,
+                  boxShadow: `0 ${8 / scale}px ${24 / scale}px rgba(60,40,20,.10)`,
+                }}
+              >
+                <div
+                  className="canvas-dots absolute inset-0"
+                  style={{ backgroundSize: '24px 24px' }}
+                />
+              </div>
               {ordered.map((item) => (
                 <CardNode
                   key={item.id}
@@ -444,8 +459,9 @@ export function CardCanvas({
                   active={selected === item.id}
                   editing={editing === item.id}
                   draftText={draftText}
-                  ring={ring}
                   handle={handle}
+                  scale={scale}
+                  pop={appear.has(item.id)}
                   canEdit={canEdit}
                   onDraft={(value) => {
                     draftRef.current = value
@@ -509,10 +525,10 @@ export function CardCanvas({
         </div>
       )}
 
-      <div className="z-20 px-2 pb-[max(0.4rem,env(safe-area-inset-bottom))] pt-1">
+      <div className="z-20 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1">
         <div
           data-toolbar
-          className="mx-auto flex max-w-full flex-col gap-1 rounded-2xl border border-line bg-paper/95 p-1.5 shadow-lg"
+          className="tool-dock mx-auto flex max-w-full flex-col gap-1 p-1.5"
           onPointerDown={(event) => {
             if (!editingRef.current) return
             if ((event.target as HTMLElement).closest('[data-commit]')) return
@@ -544,6 +560,7 @@ export function CardCanvas({
                   <ToolButton
                     key={entry.id}
                     label={entry.label}
+                    tone={entry.tone}
                     pressed={entry.id === 'rect' ? shapeOpen : tool === entry.id}
                     disabled={!canEdit && entry.id !== 'select'}
                     onClick={() => chooseTool(entry.id === 'rect' && !shapeOpen ? 'rect' : entry.id)}
@@ -553,9 +570,10 @@ export function CardCanvas({
                 ))}
                 <label
                   className={cn(
-                    'relative flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-sm font-semibold',
+                    'pressable relative flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[13px] font-semibold',
                     !canEdit && 'opacity-40',
                   )}
+                  style={{ color: '#1f7a54' }}
                 >
                   <ImageIcon className="h-6 w-6" />
                   相片
@@ -589,8 +607,8 @@ export function CardCanvas({
                         disabled={!canEdit}
                         onClick={() => setTextSize(size)}
                         className={cn(
-                          'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-lg font-bold',
-                          textSize === size ? 'bg-leaf text-white' : 'hover:bg-cream',
+                          'pressable grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-lg font-bold',
+                          textSize === size ? 'bg-leaf text-white' : 'hover:bg-white/70',
                         )}
                       >
                         {SIZE_LABEL[size]}
@@ -605,8 +623,8 @@ export function CardCanvas({
                         disabled={!canEdit}
                         onClick={() => setStrokeWidth(size)}
                         className={cn(
-                          'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
-                          strokeWidth === size ? 'bg-leaf text-white' : 'hover:bg-cream',
+                          'pressable grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
+                          strokeWidth === size ? 'bg-leaf text-white' : 'hover:bg-white/70',
                         )}
                       >
                         {STROKE_WIDTH_LABELS[size]}
@@ -625,8 +643,8 @@ export function CardCanvas({
                         disabled={!canEdit}
                         onClick={() => setStrokeStyle(id)}
                         className={cn(
-                          'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
-                          strokeStyle === id ? 'bg-leaf text-white' : 'hover:bg-cream',
+                          'pressable grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
+                          strokeStyle === id ? 'bg-leaf text-white' : 'hover:bg-white/70',
                         )}
                       >
                         {label}
@@ -645,8 +663,8 @@ export function CardCanvas({
                         disabled={!canEdit}
                         onClick={() => setFillMode(id)}
                         className={cn(
-                          'grid h-14 min-w-[4.5rem] shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
-                          fillMode === id ? 'bg-leaf text-white' : 'hover:bg-cream',
+                          'pressable grid h-14 min-w-[4.5rem] shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
+                          fillMode === id ? 'bg-leaf text-white' : 'hover:bg-white/70',
                         )}
                       >
                         {label}
@@ -654,7 +672,7 @@ export function CardCanvas({
                     ))}
                   {shapeOpen &&
                     SHAPES.map((shape) => (
-                      <ToolButton key={shape.id} label={shape.label} pressed={tool === shape.id} disabled={!canEdit} onClick={() => chooseTool(shape.id)}>
+                      <ToolButton key={shape.id} label={shape.label} tone={SHAPE_TONE} pressed={tool === shape.id} disabled={!canEdit} onClick={() => chooseTool(shape.id)}>
                         <shape.icon className="h-6 w-6" />
                       </ToolButton>
                     ))}
@@ -712,8 +730,9 @@ function CardNode({
   active,
   editing,
   draftText,
-  ring,
   handle,
+  scale,
+  pop,
   canEdit,
   onDraft,
   onCommit,
@@ -728,8 +747,9 @@ function CardNode({
   active: boolean
   editing: boolean
   draftText: string
-  ring: number
   handle: number
+  scale: number
+  pop: boolean
   canEdit: boolean
   onDraft: (value: string) => void
   onCommit: () => void
@@ -744,21 +764,25 @@ function CardNode({
   const caption = graphic && !isFillMode(item.text) && item.kind !== 'pen' && item.kind !== 'arrow' ? item.text : ''
   const fontSize = item.fontSize || 28
   const corners: Corner[] = ['nw', 'ne', 'sw', 'se']
+  const shape = isShapeKind(item.kind)
   return (
     <div
       data-node
-      className="absolute touch-none"
+      className={cn('absolute touch-none', pop && 'item-pop')}
       style={{
         left: item.x - minX,
         top: item.y - minY,
         width: item.w,
         height: item.h,
         zIndex: item.z,
-        background: isText || isImage || graphic ? 'transparent' : item.color,
+        background: isText ? '#fffdf8' : isImage || graphic ? 'transparent' : item.color,
         color: isText ? item.color : '#2a2118',
-        borderRadius: graphic ? 0 : item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 8 : 14,
+        borderRadius: isImage || graphic ? 0 : item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 8 : 14,
         border: !graphic && item.kind === 'rect' ? '3px solid #2a2118' : undefined,
-        boxShadow: active ? `0 0 0 ${ring}px #1f7a54` : isText || isImage || graphic ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
+        boxShadow: isImage || graphic ? 'none' : `0 ${4 / scale}px ${12 / scale}px rgba(60,40,20,.12)`,
+        filter: shape ? `drop-shadow(0 ${4 / scale}px ${12 / scale}px rgba(60,40,20,.12))` : undefined,
+        outline: active ? `${2 / scale}px dashed #1f7a54` : 'none',
+        outlineOffset: active ? `${4 / scale}px` : undefined,
       }}
       onPointerDown={(event) => onNodeDown(event, item)}
       onDoubleClick={(event) => {
@@ -769,28 +793,37 @@ function CardNode({
       {item.kind === 'sticky' && <span className="tape" aria-hidden />}
       {graphic && <Markup item={item} />}
       {isImage ? (
-        isAllowedImageUrl(item.text) ? (
-          <img
-            src={item.text}
-            alt=""
-            draggable={false}
-            className="pointer-events-none h-full w-full object-contain"
-            onLoad={(event) => {
-              const img = event.currentTarget
-              if (!img.naturalWidth || !img.naturalHeight) return
-              const ratio = img.naturalWidth / img.naturalHeight
-              let w = 420
-              let h = Math.round(w / ratio)
-              if (h > 460) {
-                h = 460
-                w = Math.round(h * ratio)
-              }
-              onFit({ w: Math.max(48, w), h: Math.max(36, h) })
-            }}
-          />
-        ) : (
-          <div className="grid h-full w-full place-items-center bg-cream text-lg text-muted">相片</div>
-        )
+        <div
+          className="polaroid h-full w-full"
+          style={{
+            padding: `${8 / scale}px ${8 / scale}px ${20 / scale}px`,
+            boxShadow: `0 ${4 / scale}px ${12 / scale}px rgba(60,40,20,.12)`,
+            transform: active ? 'rotate(0deg)' : `rotate(${polaroidTilt(item.id)}deg)`,
+          }}
+        >
+          {isAllowedImageUrl(item.text) ? (
+            <img
+              src={item.text}
+              alt=""
+              draggable={false}
+              className="pointer-events-none h-full w-full object-contain"
+              onLoad={(event) => {
+                const img = event.currentTarget
+                if (!img.naturalWidth || !img.naturalHeight) return
+                const ratio = img.naturalWidth / img.naturalHeight
+                let w = 420
+                let h = Math.round(w / ratio)
+                if (h > 460) {
+                  h = 460
+                  w = Math.round(h * ratio)
+                }
+                onFit({ w: Math.max(48, w), h: Math.max(36, h) })
+              }}
+            />
+          ) : (
+            <div className="grid h-full w-full place-items-center text-lg text-muted">相片</div>
+          )}
+        </div>
       ) : editing ? (
         <textarea
           autoFocus
@@ -840,7 +873,10 @@ function CardNode({
             }}
             onPointerDown={(event) => onResizeDown(event, item, corner)}
           >
-            <span className="rounded-sm border-[3px] border-leaf bg-white" style={{ width: handle * 0.38, height: handle * 0.38 }} />
+            <span
+              className="rounded-full border-leaf bg-white"
+              style={{ width: 14 / scale, height: 14 / scale, borderWidth: Math.max(2, 2 / scale) }}
+            />
           </button>
         ))}
     </div>
@@ -892,8 +928,8 @@ function EditBar({
               aria-pressed={(item.fontSize || 28) === size}
               onClick={() => onSize(size)}
               className={cn(
-                'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-3 text-lg font-bold',
-                (item.fontSize || 28) === size ? 'bg-leaf text-white' : 'hover:bg-cream',
+                'pressable grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-3 text-lg font-bold',
+                (item.fontSize || 28) === size ? 'bg-leaf text-white' : 'hover:bg-white/70',
               )}
             >
               {SIZE_LABEL[size]}
@@ -902,12 +938,12 @@ function EditBar({
         </>
       )}
       {editing && (
-        <button type="button" data-commit onClick={onDone} className="grid h-14 min-w-[5.5rem] shrink-0 place-items-center rounded-xl bg-leaf px-4 text-lg font-bold text-white">
+        <button type="button" data-commit onClick={onDone} className="pressable grid h-14 min-w-[5.5rem] shrink-0 place-items-center rounded-xl bg-leaf px-4 text-lg font-bold text-white">
           完成
         </button>
       )}
       <span className="mx-1 h-10 w-px shrink-0 bg-line" />
-      <ToolButton label="刪" disabled={!canDelete} onClick={onDelete}>
+      <ToolButton label="刪" tone="#b91c1c" disabled={!canDelete} onClick={onDelete}>
         <Trash2 className="h-6 w-6" />
       </ToolButton>
     </>
@@ -916,12 +952,14 @@ function EditBar({
 
 function ToolButton({
   label,
+  tone = '#1f1a14',
   pressed,
   disabled,
   onClick,
   children,
 }: {
   label: string
+  tone?: string
   pressed?: boolean
   disabled?: boolean
   onClick: () => void
@@ -935,10 +973,11 @@ function ToolButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-sm font-semibold',
-        pressed ? 'bg-leaf text-white' : 'hover:bg-cream',
+        'pressable flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[13px] font-semibold',
+        pressed ? 'text-white' : 'hover:bg-white/70',
         disabled && 'opacity-40',
       )}
+      style={{ background: pressed ? tone : 'transparent', color: pressed ? '#fff' : tone }}
     >
       {children}
       {label}
@@ -966,7 +1005,7 @@ function ColorDot({
       aria-pressed={pressed}
       disabled={disabled}
       onClick={onClick}
-      className={cn('h-12 w-12 shrink-0 rounded-xl border-4', pressed ? 'border-ink' : 'border-white')}
+      className={cn('pressable h-12 w-12 shrink-0 rounded-xl border-4', pressed ? 'border-ink' : 'border-white')}
       style={{ background: swatch }}
     />
   )
