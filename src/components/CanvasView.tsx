@@ -1,5 +1,5 @@
 import { ArrowUpRight, Circle, Heart, Image as ImageIcon, MousePointer2, Pencil, Scan, Square, Star, StickyNote, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { isFontSize, NOTE_COLOR_LABELS, NOTE_COLORS, TEXT_COLOR_LABELS, TEXT_COLORS } from '../../shared/colors'
 import { containBox, resizeBox, type Corner } from '../../shared/geometry'
 import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk } from '../../shared/markup'
@@ -100,6 +100,10 @@ export function CanvasView({
   const [tool, setTool] = useState<Tool>('sticky')
   const [color, setColor] = useState<string>(NOTE_COLORS[0])
   const [selected, setSelected] = useState<string | null>(null)
+  const selectedRef = useRef<string | null>(null)
+  const gestureMoved = useRef(false)
+  const gestureSelected = useRef(false)
+  const editOpenedAt = useRef(0)
   const [editing, setEditing] = useState<string | null>(null)
   const [draftText, setDraftText] = useState('')
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -109,6 +113,24 @@ export function CanvasView({
   const appear = useAppearIds(items.map((item) => item.id).join('\u0001'))
   const drawing = tool === 'pen' || tool === 'arrow'
   const history = useEditHistory({ onCreate, onUpdate, onLocal, onRemove })
+
+  function selectItem(id: string | null) {
+    selectedRef.current = id
+    setSelected(id)
+  }
+
+  function canType(item: CanvasItem) {
+    if (!canEdit || item.kind === 'image' || item.kind === 'pen' || item.kind === 'arrow') return false
+    if (isShapeKind(item.kind) && isFillMode(item.text || 'both')) return false
+    return item.kind === 'text' || item.kind === 'sticky' || isShapeKind(item.kind)
+  }
+
+  function beginEdit(item: CanvasItem) {
+    editOpenedAt.current = performance.now()
+    selectItem(item.id)
+    setDraftText(item.text)
+    setEditing(item.id)
+  }
 
   function rememberCreate(item: CanvasItem | null) {
     if (item) history.note({ type: 'create', item })
@@ -228,10 +250,10 @@ export function CanvasView({
         if (!item || !canDelete(item)) return
         event.preventDefault()
         void onDelete(item.id)
-        setSelected(null)
+        selectItem(null)
       }
       if (event.key === 'Escape') {
-        setSelected(null)
+        selectItem(null)
         setEditing(null)
         setTool('select')
       }
@@ -286,14 +308,16 @@ export function CanvasView({
 
   function chooseTool(next: Tool) {
     setTool(next)
-    if (next === 'pen' || next === 'arrow') setSelected(null)
+    if (next === 'pen' || next === 'arrow') selectItem(null)
     if (next === 'text') setColor(TEXT_COLORS[0])
     else if (tool === 'text') setColor(NOTE_COLORS[0])
   }
 
   function onBackgroundDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0 && event.button !== 1) return
-    if ((event.target as HTMLElement).closest('[data-node], [data-toolbar]')) return
+    const target = event.target as HTMLElement
+    if (target.closest('[data-toolbar]')) return
+    if (target.closest('[data-node]') && tool !== 'pen' && tool !== 'arrow') return
     const startX = event.clientX
     const startY = event.clientY
     const origin = camera.current
@@ -329,7 +353,7 @@ export function CanvasView({
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       if (mode === 'pan') {
-        if (!moved) setSelected(null)
+        if (!moved) selectItem(null)
         return
       }
       if (mode === 'ink') {
@@ -368,19 +392,29 @@ export function CanvasView({
       }).then((created) => {
         const saved = rememberCreate(created)
         if (!saved) return
-        setSelected(saved.id)
-        if (saved.kind === 'sticky' || saved.kind === 'text') setEditing(saved.id)
+        if (saved.kind === 'sticky' || saved.kind === 'text') beginEdit(saved)
+        else selectItem(saved.id)
       })
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
 
-  function onNodeDown(event: ReactPointerEvent, item: CanvasItem) {
+  function onNodeClick(event: ReactMouseEvent, item: CanvasItem) {
     event.stopPropagation()
+    if (drawing || gestureMoved.current || !gestureSelected.current || !canType(item)) return
+    if ((event.target as HTMLElement).closest('[data-resize], textarea, button')) return
+    beginEdit(item)
+  }
+
+  function onNodeDown(event: ReactPointerEvent, item: CanvasItem) {
     if (drawing) return
-    setSelected(item.id)
-    if (!canEdit || tool !== 'select') return
+    event.stopPropagation()
+    gestureSelected.current = selectedRef.current === item.id
+    gestureMoved.current = false
+    selectItem(item.id)
+    if (!canEdit) return
+    if (editing === item.id) return
     const target = event.target
     if (target instanceof Element && target.closest('[data-resize], textarea, button')) return
     const before = { x: item.x, y: item.y, w: item.w, h: item.h, z: item.z }
@@ -397,7 +431,9 @@ export function CanvasView({
     onLocal(item.id, { z: maxZ })
     const move = (pointer: PointerEvent) => {
       if (pointers.has(pointer.pointerId)) pointers.set(pointer.pointerId, { x: pointer.clientX, y: pointer.clientY })
+      if (Math.hypot(pointer.clientX - dragStart.x, pointer.clientY - dragStart.y) >= 6) gestureMoved.current = true
       if (mode === 'pinch' && pointers.size >= 2) {
+        gestureMoved.current = true
         const [a, b] = [...pointers.values()]
         const dist = Math.max(8, Math.hypot(a.x - b.x, a.y - b.y))
         const scale = dist / pinchDist
@@ -409,7 +445,7 @@ export function CanvasView({
         emitLive(item.id, placed)
         return
       }
-      if (pointer.pointerId !== pointerId) return
+      if (pointer.pointerId !== pointerId || !gestureMoved.current) return
       placed = {
         x: origin.x + (pointer.clientX - dragStart.x) / camera.current.zoom,
         y: origin.y + (pointer.clientY - dragStart.y) / camera.current.zoom,
@@ -456,9 +492,14 @@ export function CanvasView({
     const before = { x: item.x, y: item.y, w: item.w, h: item.h }
     const origin = { x: item.x, y: item.y, w: item.w, h: item.h }
     const start = screenToWorld(event.clientX, event.clientY)
+    const startX = event.clientX
+    const startY = event.clientY
+    let moved = false
     let placed = origin
     onInteract(item.id, true)
     const move = (pointer: PointerEvent) => {
+      if (Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 6) return
+      moved = true
       const point = screenToWorld(pointer.clientX, pointer.clientY)
       placed = resizeBox(origin, corner, point.x - start.x, point.y - start.y, item.kind === 'image')
       onLocal(item.id, placed)
@@ -467,6 +508,11 @@ export function CanvasView({
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      if (!moved) {
+        onInteract(item.id, false)
+        if (canType(item)) beginEdit(item)
+        return
+      }
       emitLive(item.id, placed, true)
       void Promise.resolve(onUpdate(item.id, placed)).finally(() => onInteract(item.id, false))
       rememberPatch(item.id, before, placed)
@@ -515,7 +561,7 @@ export function CanvasView({
     const saved = rememberCreate(created)
     if (saved) {
       fitted.current.add(saved.id)
-      setSelected(saved.id)
+      selectItem(saved.id)
       setTool('select')
     }
   }
@@ -561,14 +607,14 @@ export function CanvasView({
                   border: !graphic && item.kind === 'rect' ? '2px solid #2a2118' : undefined,
                   boxShadow: isImage || graphic ? 'none' : SOFT_SHADOW,
                   filter: shape ? 'drop-shadow(0 4px 12px rgba(60,40,20,.12))' : undefined,
-                  pointerEvents: inkItem ? 'none' : undefined,
+                  pointerEvents: drawing || inkItem ? 'none' : undefined,
                 }}
                 onPointerDown={inkItem ? undefined : (event) => onNodeDown(event, item)}
+                onClick={(event) => onNodeClick(event, item)}
                 onDoubleClick={(event) => {
                   event.stopPropagation()
-                  if (!canEdit || isImage || inkItem || (graphic && isFillMode(item.text || 'both'))) return
-                  setSelected(item.id)
-                  setEditing(item.id)
+                  if (!canType(item)) return
+                  beginEdit(item)
                 }}
               >
                 {item.kind === 'sticky' && <span className="tape" aria-hidden />}
@@ -605,7 +651,12 @@ export function CanvasView({
                     style={{ color: isText ? item.color : '#2a2118', fontSize, textAlign: item.kind === 'rect' || item.kind === 'ellipse' ? 'center' : 'left' }}
                     onChange={(event) => setDraftText(event.target.value)}
                     onPointerDown={(event) => event.stopPropagation()}
-                    onBlur={() => {
+                    onBlur={(event) => {
+                      if (performance.now() - editOpenedAt.current < 400) {
+                        const field = event.currentTarget
+                        setTimeout(() => field.focus(), 0)
+                        return
+                      }
                       const text = draftText
                       setEditing(null)
                       if (text !== item.text) {
@@ -623,7 +674,7 @@ export function CanvasView({
                     )}
                     style={{ fontSize }}
                   >
-                    {graphic ? caption : item.text ? <RichNote text={item.text} /> : active ? '按兩下輸入文字' : ''}
+                    {graphic ? caption : item.text ? <RichNote text={item.text} /> : active ? '再按一下打字' : ''}
                   </div>
                 )}
                 {active && canEdit &&
@@ -666,7 +717,7 @@ export function CanvasView({
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => {
                       void onDelete(item.id)
-                      setSelected(null)
+                      selectItem(null)
                     }}
                   >
                     <Trash2 className="h-4 w-4" />
@@ -770,7 +821,7 @@ export function CanvasView({
             onClick={() => {
               if (!selected) return
               void onDelete(selected)
-              setSelected(null)
+              selectItem(null)
             }}
           >
             <Trash2 className="h-4 w-4" />

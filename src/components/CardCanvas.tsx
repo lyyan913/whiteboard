@@ -1,5 +1,5 @@
 import { ArrowUpRight, Circle, Cloud, Heart, Image as ImageIcon, MessageCircle, MousePointer2, Pencil, Shapes, Square, Star, StickyNote, Trash2, Triangle, Type } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { DRAW_COLOR_LABELS, DRAW_COLORS, FONT_SIZES, NOTE_COLOR_LABELS, NOTE_COLORS, STROKE_WIDTHS, STROKE_WIDTH_LABELS, TEXT_COLOR_LABELS, TEXT_COLORS, isFontSize, isNoteColor, isTextColor } from '../../shared/colors'
 import { containBox, resizeBox, type Corner } from '../../shared/geometry'
 import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk, type FillMode, type StrokeStyle } from '../../shared/markup'
@@ -88,6 +88,33 @@ function graphicKind(kind: string) {
   return kind === 'pen' || kind === 'arrow' || isShapeKind(kind)
 }
 
+type Camera = { zoom: number; x: number; y: number }
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function containCamera(viewW: number, viewH: number, boxW: number, boxH: number): Camera {
+  const pad = 8
+  const zoom = clampNumber(Math.min((Math.max(1, viewW) - pad * 2) / boxW, (Math.max(1, viewH) - pad * 2) / boxH), 0.12, 2.4)
+  return {
+    zoom,
+    x: (viewW - boxW * zoom) / 2,
+    y: (viewH - boxH * zoom) / 2,
+  }
+}
+
+function defaultCamera(viewW: number, viewH: number, boxW: number, boxH: number): Camera {
+  if (viewH <= viewW) return containCamera(viewW, viewH, boxW, boxH)
+  const pad = 8
+  const zoom = clampNumber((Math.max(1, viewH) - pad * 2) / boxH, 0.12, 2.4)
+  return {
+    zoom,
+    x: (viewW - boxW * zoom) / 2,
+    y: (viewH - boxH * zoom) / 2,
+  }
+}
+
 export function CardCanvas({
   pageId,
   items,
@@ -123,17 +150,25 @@ export function CardCanvas({
   const worldRef = useRef<HTMLDivElement>(null)
   const itemsRef = useRef(items)
   const boundsRef = useRef(cardBounds(items))
-  const scaleRef = useRef(1)
   const measuredBox = useRef({ w: 0, h: 0 })
+  const cameraRef = useRef<Camera>({ zoom: 0.4, x: 0, y: 0 })
+  const userAdjusted = useRef(false)
+  const gesture = useRef(0)
+  const pointers = useRef(new Map<number, { x: number; y: number }>())
+  const pinch = useRef<{ dist: number; zoom: number; wx: number; wy: number } | null>(null)
   const lastLive = useRef(0)
   const editingRef = useRef<string | null>(null)
+  const selectedRef = useRef<string | null>(null)
+  const gestureMoved = useRef(false)
+  const gestureSelected = useRef(false)
+  const editOpenedAt = useRef(0)
   const draftRef = useRef('')
   const fitted = useRef(new Set<string>())
   itemsRef.current = items
   const bounds = cardBounds(items)
   boundsRef.current = bounds
 
-  const [scale, setScale] = useState(0.4)
+  const [camera, setCamera] = useState<Camera>({ zoom: 0.4, x: 0, y: 0 })
   const [ready, setReady] = useState(false)
   const [tool, setTool] = useState<Tool>('select')
   const [color, setColor] = useState<string>(DRAW_COLORS[1])
@@ -163,7 +198,7 @@ export function CardCanvas({
   }
 
   useEffect(() => {
-    setSelected(null)
+    selectItem(null)
     setEditing(null)
     editingRef.current = null
     setDraft(null)
@@ -171,26 +206,77 @@ export function CardCanvas({
     history.reset()
   }, [pageId, history.reset])
 
+  function commitCamera(next: Camera, adjusted = false) {
+    if (adjusted) userAdjusted.current = true
+    cameraRef.current = next
+    setCamera(next)
+  }
+
+  function fitView() {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const box = boundsRef.current
+    userAdjusted.current = true
+    commitCamera(containCamera(viewport.clientWidth, viewport.clientHeight, box.w, box.h))
+  }
+
+  function zoomBy(factor: number) {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const current = cameraRef.current
+    const nextZoom = clampNumber(current.zoom * factor, 0.12, 3)
+    const cx = viewport.clientWidth / 2
+    const cy = viewport.clientHeight / 2
+    const wx = (cx - current.x) / current.zoom
+    const wy = (cy - current.y) / current.zoom
+    commitCamera({ zoom: nextZoom, x: cx - wx * nextZoom, y: cy - wy * nextZoom }, true)
+  }
+
   useLayoutEffect(() => {
     const viewport = viewportRef.current
     if (!viewport) return
+    userAdjusted.current = false
     measuredBox.current = { w: 0, h: 0 }
     const measure = () => {
       const w = viewport.clientWidth
       const h = viewport.clientHeight
-      if (measuredBox.current.w > 0 && Math.abs(w - measuredBox.current.w) < 28 && Math.abs(h - measuredBox.current.h) < 28) return
+      const prev = measuredBox.current
+      const flipped = prev.w > 0 && prev.h > 0 && (prev.h > prev.w) !== (h > w)
+      if (!flipped && prev.w > 0 && Math.abs(w - prev.w) < 28 && Math.abs(h - prev.h) < 28) return
+      if (flipped) userAdjusted.current = false
       measuredBox.current = { w, h }
-      const fit = Math.min(Math.max(160, w - 24) / bounds.w, Math.max(160, h - 16) / bounds.h)
-      const next = Math.round(Math.min(1.6, Math.max(0.2, fit)) * 1000) / 1000
-      scaleRef.current = next
-      setScale(next)
+      if (!userAdjusted.current) {
+        const box = boundsRef.current
+        const next = defaultCamera(w, h, box.w, box.h)
+        cameraRef.current = next
+        setCamera(next)
+      }
       setReady(true)
     }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(viewport)
     return () => observer.disconnect()
-  }, [bounds.w, bounds.h])
+  }, [bounds.w, bounds.h, pageId])
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault()
+      const rect = viewport.getBoundingClientRect()
+      const current = cameraRef.current
+      const nextZoom = clampNumber(current.zoom * (event.deltaY > 0 ? 0.92 : 1.08), 0.12, 3)
+      const wx = (event.clientX - rect.left - current.x) / current.zoom
+      const wy = (event.clientY - rect.top - current.y) / current.zoom
+      commitCamera(
+        { zoom: nextZoom, x: event.clientX - rect.left - wx * nextZoom, y: event.clientY - rect.top - wy * nextZoom },
+        true,
+      )
+    }
+    viewport.addEventListener('wheel', onWheel, { passive: false })
+    return () => viewport.removeEventListener('wheel', onWheel)
+  }, [])
 
   function screenToCard(clientX: number, clientY: number) {
     const rect = worldRef.current?.getBoundingClientRect()
@@ -209,6 +295,17 @@ export function CardCanvas({
     onLive(id, patch)
   }
 
+  function selectItem(id: string | null) {
+    selectedRef.current = id
+    setSelected(id)
+  }
+
+  function canType(item: CanvasItem) {
+    if (!canEdit || item.kind === 'image' || item.kind === 'pen' || item.kind === 'arrow') return false
+    if (isShapeKind(item.kind) && isFillMode(item.text || 'both')) return false
+    return item.kind === 'text' || item.kind === 'sticky' || isShapeKind(item.kind)
+  }
+
   function commitEdit() {
     const id = editingRef.current
     if (!id) return
@@ -223,7 +320,8 @@ export function CardCanvas({
   }
 
   function beginEdit(item: CanvasItem) {
-    setSelected(item.id)
+    editOpenedAt.current = performance.now()
+    selectItem(item.id)
     setEditing(item.id)
     editingRef.current = item.id
     draftRef.current = item.text
@@ -251,10 +349,10 @@ export function CardCanvas({
         if (!item || !canDelete(item)) return
         event.preventDefault()
         void onDelete(item.id)
-        setSelected(null)
+        selectItem(null)
       }
       if (event.key === 'Escape') {
-        setSelected(null)
+        selectItem(null)
         setEditing(null)
         editingRef.current = null
         setTool('select')
@@ -271,7 +369,7 @@ export function CardCanvas({
 
   function chooseTool(next: Tool) {
     setTool(next)
-    if (next === 'pen' || next === 'arrow') setSelected(null)
+    if (next === 'pen' || next === 'arrow') selectItem(null)
     if (next === 'text' && !isTextColor(color)) setColor(TEXT_COLORS[0])
     if (next === 'sticky' && !isNoteColor(color)) setColor(NOTE_COLORS[0])
     if ((next === 'pen' || next === 'arrow' || isShapeKind(next)) && color === TEXT_COLORS[0]) setColor(DRAW_COLORS[1])
@@ -297,25 +395,111 @@ export function CardCanvas({
     }).then((created) => rememberCreate(created))
   }
 
+  function contentOverflows() {
+    const viewport = viewportRef.current
+    if (!viewport) return false
+    const box = boundsRef.current
+    const zoom = cameraRef.current.zoom
+    return box.w * zoom > viewport.clientWidth + 2 || box.h * zoom > viewport.clientHeight + 2
+  }
+
+  function onViewportPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    if (pointers.current.size < 2) return
+    gesture.current += 1
+    setInk(null)
+    setDraft(null)
+    const [a, b] = [...pointers.current.values()]
+    const rect = viewportRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const midX = (a.x + b.x) / 2
+    const midY = (a.y + b.y) / 2
+    const current = cameraRef.current
+    pinch.current = {
+      dist: Math.max(12, Math.hypot(a.x - b.x, a.y - b.y)),
+      zoom: current.zoom,
+      wx: (midX - rect.left - current.x) / current.zoom,
+      wy: (midY - rect.top - current.y) / current.zoom,
+    }
+    userAdjusted.current = true
+  }
+
+  function onViewportPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!pointers.current.has(event.pointerId)) return
+    pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    const start = pinch.current
+    if (!start || pointers.current.size < 2) return
+    const [a, b] = [...pointers.current.values()]
+    const rect = viewportRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const dist = Math.max(12, Math.hypot(a.x - b.x, a.y - b.y))
+    const midX = (a.x + b.x) / 2
+    const midY = (a.y + b.y) / 2
+    const nextZoom = clampNumber(start.zoom * (dist / start.dist), 0.12, 3)
+    commitCamera({
+      zoom: nextZoom,
+      x: midX - rect.left - start.wx * nextZoom,
+      y: midY - rect.top - start.wy * nextZoom,
+    }, true)
+  }
+
+  function onViewportPointerEnd(event: ReactPointerEvent<HTMLDivElement>) {
+    pointers.current.delete(event.pointerId)
+    if (pointers.current.size < 2) pinch.current = null
+  }
+
+  function startPan(event: ReactPointerEvent, clearSelection: boolean) {
+    const startX = event.clientX
+    const startY = event.clientY
+    const origin = { ...cameraRef.current }
+    const token = gesture.current
+    let moved = false
+    const move = (pointer: PointerEvent) => {
+      if (token !== gesture.current) return
+      const dx = pointer.clientX - startX
+      const dy = pointer.clientY - startY
+      if (Math.hypot(dx, dy) < 6) return
+      if (!contentOverflows()) return
+      moved = true
+      commitCamera({ zoom: origin.zoom, x: origin.x + dx, y: origin.y + dy }, true)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      if (token !== gesture.current) return
+      if (!moved && clearSelection) selectItem(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   function onCardPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
-    if (target.closest('[data-node], [data-resize], textarea, button')) return
+    if (target.closest('[data-resize], textarea, button')) return
+    if (target.closest('[data-node]') && tool !== 'pen' && tool !== 'arrow') return
+    if (pointers.current.size > 1 || pinch.current) return
     if (editingRef.current) {
       commitEdit()
-      setSelected(null)
+      selectItem(null)
+      return
+    }
+    if (tool === 'select' || tool === 'image' || !canEdit) {
+      startPan(event, Boolean(selected))
       return
     }
     if (selected && tool !== 'pen' && tool !== 'arrow') {
-      setSelected(null)
+      selectItem(null)
       return
     }
-    if (!canEdit || tool === 'select' || tool === 'image') return
     const origin = screenToCard(event.clientX, event.clientY)
+    const token = gesture.current
     if (tool === 'pen' || tool === 'arrow') {
       const points = [origin]
       setInk(points)
       const move = (pointer: PointerEvent) => {
+        if (token !== gesture.current) return
         const point = screenToCard(pointer.clientX, pointer.clientY)
         const last = points[points.length - 1]
         if (Math.hypot(point.x - last.x, point.y - last.y) < 2) return
@@ -326,6 +510,7 @@ export function CardCanvas({
         window.removeEventListener('pointermove', move)
         window.removeEventListener('pointerup', up)
         setInk(null)
+        if (token !== gesture.current) return
         if (tool === 'arrow' && points.length < 2) return
         placeInk(points, tool)
       }
@@ -336,6 +521,7 @@ export function CardCanvas({
     const startX = event.clientX
     const startY = event.clientY
     const move = (pointer: PointerEvent) => {
+      if (token !== gesture.current) return
       const point = screenToCard(pointer.clientX, pointer.clientY)
       setDraft({
         x: Math.min(origin.x, point.x),
@@ -348,6 +534,7 @@ export function CardCanvas({
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       setDraft(null)
+      if (token !== gesture.current) return
       const point = screenToCard(pointer.clientX, pointer.clientY)
       const kind = tool
       if (kind !== 'text' && kind !== 'sticky' && !isShapeKind(kind)) return
@@ -374,7 +561,7 @@ export function CardCanvas({
         const saved = rememberCreate(created)
         if (!saved) return
         setTool('select')
-        setSelected(saved.id)
+        selectItem(saved.id)
         if (saved.kind === 'text' || saved.kind === 'sticky') beginEdit(saved)
       })
     }
@@ -404,19 +591,28 @@ export function CardCanvas({
       if (saved) {
         fitted.current.add(saved.id)
         setTool('select')
-        setSelected(saved.id)
+        selectItem(saved.id)
       }
     } catch (error) {
       onError(error instanceof Error ? error.message : '上載失敗')
     }
   }
 
-  function onNodeDown(event: ReactPointerEvent, item: CanvasItem) {
+  function onNodeClick(event: React.MouseEvent, item: CanvasItem) {
     event.stopPropagation()
+    if (drawing || gestureMoved.current || !gestureSelected.current || !canType(item)) return
+    if ((event.target as HTMLElement).closest('[data-resize], textarea, button')) return
+    beginEdit(item)
+  }
+
+  function onNodeDown(event: ReactPointerEvent, item: CanvasItem) {
     if (drawing) return
+    event.stopPropagation()
     if (editingRef.current && editingRef.current !== item.id) commitEdit()
-    setSelected(item.id)
-    if (!canEdit || tool !== 'select') return
+    gestureSelected.current = selectedRef.current === item.id
+    gestureMoved.current = false
+    selectItem(item.id)
+    if (!canEdit) return
     if (editingRef.current === item.id) return
     const target = event.target
     if (target instanceof Element && target.closest('[data-resize], textarea, button')) return
@@ -430,11 +626,15 @@ export function CardCanvas({
     let mode: 'drag' | 'pinch' = 'drag'
     let pinchDist = 1
     const start = screenToCard(event.clientX, event.clientY)
+    const startX = event.clientX
+    const startY = event.clientY
     onInteract(item.id, true)
     onLocal(item.id, { z: maxZ })
     const move = (pointer: PointerEvent) => {
       if (pointers.has(pointer.pointerId)) pointers.set(pointer.pointerId, { x: pointer.clientX, y: pointer.clientY })
+      if (Math.hypot(pointer.clientX - startX, pointer.clientY - startY) >= 6) gestureMoved.current = true
       if (mode === 'pinch' && pointers.size >= 2) {
+        gestureMoved.current = true
         const [a, b] = [...pointers.values()]
         const dist = Math.max(8, Math.hypot(a.x - b.x, a.y - b.y))
         const scaled = resizeBox(origin, 'se', origin.w * (dist / pinchDist - 1), origin.h * (dist / pinchDist - 1), true)
@@ -446,7 +646,7 @@ export function CardCanvas({
         emitLive(item.id, placed)
         return
       }
-      if (pointer.pointerId !== pointerId) return
+      if (pointer.pointerId !== pointerId || !gestureMoved.current) return
       const point = screenToCard(pointer.clientX, pointer.clientY)
       const next = clampToCard(item.x + (point.x - start.x), item.y + (point.y - start.y), item.w, item.h)
       placed = { x: next.x, y: next.y, w: item.w, h: item.h }
@@ -491,8 +691,13 @@ export function CardCanvas({
     const before = { x: item.x, y: item.y, w: item.w, h: item.h }
     const start = screenToCard(event.clientX, event.clientY)
     const origin = { x: item.x, y: item.y, w: item.w, h: item.h }
+    const startX = event.clientX
+    const startY = event.clientY
+    let moved = false
     let placed = origin
     const move = (pointer: PointerEvent) => {
+      if (Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 6) return
+      moved = true
       const point = screenToCard(pointer.clientX, pointer.clientY)
       placed = placeCard(resizeBox(origin, corner, point.x - start.x, point.y - start.y, item.kind === 'image'), item.kind === 'image')
       onLocal(item.id, placed)
@@ -501,6 +706,11 @@ export function CardCanvas({
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      if (!moved) {
+        onInteract(item.id, false)
+        if (canType(item)) beginEdit(item)
+        return
+      }
       emitLive(item.id, placed, true)
       void Promise.resolve(onUpdate(item.id, placed)).finally(() => onInteract(item.id, false))
       rememberPatch(item.id, before, placed)
@@ -524,40 +734,43 @@ export function CardCanvas({
   }
 
   const ordered = [...items].sort((a, b) => a.z - b.z || a.createdAt - b.createdAt)
+  const scale = camera.zoom
   const handle = Math.max(40, 56 / scale)
+  const viewW = viewportRef.current?.clientWidth ?? 0
+  const viewH = viewportRef.current?.clientHeight ?? 0
+  const showPanHint = ready && viewH > viewW && bounds.w * scale > viewW + 8
 
   const shapeOpen = isShapeKind(tool)
   const inkOpen = tool === 'pen' || tool === 'arrow' || shapeOpen
   const liveInk = ink && ink.length > 1 ? inkFrame(ink, 0) : null
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-cream">
-      <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-auto">
-        <div key={pageId} className={cn('card-stage flex min-h-full min-w-full items-center justify-center p-3', ready ? 'page-fade' : 'opacity-0')}>
-          <div style={{ width: bounds.w * scale, height: bounds.h * scale }}>
-            <div
-              ref={worldRef}
-              data-card
-              className="relative touch-none"
-              style={{ width: bounds.w, height: bounds.h, transform: `scale(${scale})`, transformOrigin: 'top left' }}
-              onPointerDown={onCardPointerDown}
-            >
-              <div
-                className="canvas-sheet absolute overflow-hidden"
-                style={{
-                  left: -bounds.minX,
-                  top: -bounds.minY,
-                  width: CARD_W,
-                  height: CARD_H,
-                  borderRadius: 20 / scale,
-                  boxShadow: `0 ${8 / scale}px ${24 / scale}px rgba(60,40,20,.10)`,
-                }}
-              >
-                <div
-                  className="canvas-dots absolute inset-0"
-                  style={{ backgroundSize: '24px 24px' }}
-                />
-              </div>
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-cream">
+      <div className="relative min-h-0 min-w-0 flex-1">
+        <div
+          key={pageId}
+          ref={viewportRef}
+          data-card
+          className={cn('canvas-sheet board-sheet absolute inset-1 touch-none overflow-hidden sm:inset-1.5', ready ? 'page-fade' : 'opacity-0')}
+          onPointerDownCapture={onViewportPointerDown}
+          onPointerMove={onViewportPointerMove}
+          onPointerUp={onViewportPointerEnd}
+          onPointerCancel={onViewportPointerEnd}
+        >
+          <div
+            className="canvas-dots pointer-events-none absolute inset-0"
+            style={{
+              backgroundSize: `${24 * scale}px ${24 * scale}px`,
+              backgroundPosition: `${camera.x - bounds.minX * scale}px ${camera.y - bounds.minY * scale}px`,
+            }}
+          />
+          <div
+            ref={worldRef}
+            data-world
+            className="absolute left-0 top-0 touch-none"
+            style={{ width: bounds.w, height: bounds.h, transform: `translate(${camera.x}px, ${camera.y}px) scale(${scale})`, transformOrigin: 'top left' }}
+            onPointerDown={onCardPointerDown}
+          >
               {ordered.map((item) => (
                 <CardNode
                   key={item.id}
@@ -576,8 +789,10 @@ export function CardCanvas({
                     draftRef.current = value
                     setDraftText(value)
                   }}
+                  openedAt={editOpenedAt.current}
                   onCommit={commitEdit}
                   onNodeDown={onNodeDown}
+                  onNodeClick={onNodeClick}
                   onResizeDown={onResizeDown}
                   onEdit={() => {
                     if (!canEdit || item.kind === 'image' || item.kind === 'pen' || item.kind === 'arrow') return
@@ -614,9 +829,13 @@ export function CardCanvas({
                   />
                 </svg>
               )}
-            </div>
           </div>
         </div>
+        {showPanHint && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-2 z-10 flex justify-center px-3">
+            <p className="rounded-full bg-ink/80 px-3 py-1 text-sm font-semibold text-white">左右拖動可看整張卡片</p>
+          </div>
+        )}
         {items.length === 0 && !draft && (
           <div className="board-empty pointer-events-none absolute inset-0 z-10 grid place-items-center px-4 text-center">
             <div className="max-w-md rounded-2xl bg-white/90 px-4 py-3 shadow-sm">
@@ -636,10 +855,10 @@ export function CardCanvas({
         )}
       </div>
 
-      <div className="z-20 shrink-0 px-2 pb-1 pt-1">
+      <div className="z-20 w-full min-w-0 shrink-0 px-2 pb-1 pt-1">
         <div
           data-toolbar
-          className="tool-dock dock-stack mx-auto flex max-w-full flex-col gap-1 p-1.5"
+          className="tool-dock dock-stack mx-auto flex w-full min-w-0 max-w-full flex-col gap-1 p-1.5"
           onPointerDown={(event) => {
             if (!editingRef.current) return
             if ((event.target as HTMLElement).closest('[data-commit]')) return
@@ -647,20 +866,21 @@ export function CardCanvas({
           }}
         >
           {selectedItem && canEdit ? (
-            <div className="dock-row flex items-center gap-1 overflow-x-auto">
+            <div className="dock-row flex w-full min-w-0 flex-wrap items-center justify-center gap-1">
             <DockHistory
               canUndo={history.canUndo}
               canRedo={history.canRedo}
               onUndo={() => void history.undo()}
               onRedo={() => void history.redo()}
             />
+            <DockZoom onOut={() => zoomBy(1 / 1.2)} onFit={fitView} onIn={() => zoomBy(1.2)} />
             <EditBar
               item={selectedItem}
               editing={editing === selectedItem.id}
               canDelete={canDelete(selectedItem)}
               onBack={() => {
                 if (editingRef.current) commitEdit()
-                setSelected(null)
+                selectItem(null)
                 setTool('select')
               }}
               onColor={(next) => paint(selectedItem, next)}
@@ -668,19 +888,13 @@ export function CardCanvas({
               onDone={commitEdit}
               onDelete={() => {
                 void onDelete(selectedItem.id)
-                setSelected(null)
+                selectItem(null)
               }}
             />
             </div>
           ) : (
             <>
-              <div className="dock-row flex items-center gap-1 overflow-x-auto">
-                <DockHistory
-                  canUndo={history.canUndo}
-                  canRedo={history.canRedo}
-                  onUndo={() => void history.undo()}
-                  onRedo={() => void history.redo()}
-                />
+              <div className="dock-row flex w-full min-w-0 flex-wrap items-center justify-center gap-1">
                 {TOOLS.map((entry) => (
                   <ToolButton
                     key={entry.id}
@@ -710,9 +924,16 @@ export function CardCanvas({
                     onChange={(event) => void onPhoto(event)}
                   />
                 </label>
+                <DockHistory
+                  canUndo={history.canUndo}
+                  canRedo={history.canRedo}
+                  onUndo={() => void history.undo()}
+                  onRedo={() => void history.redo()}
+                />
+                <DockZoom onOut={() => zoomBy(1 / 1.2)} onFit={fitView} onIn={() => zoomBy(1.2)} />
               </div>
               {(tool === 'text' || tool === 'sticky' || inkOpen) && (
-                <div className="dock-panel flex items-center gap-1 overflow-x-auto border-t border-line pt-1">
+                <div className="dock-panel flex w-full min-w-0 flex-wrap items-center justify-center gap-1 border-t border-line pt-1">
                   {(tool === 'text' ? TEXT_COLORS : tool === 'sticky' ? NOTE_COLORS : DRAW_COLORS).map((swatch) => (
                     <ColorDot
                       key={swatch}
@@ -824,8 +1045,10 @@ function CardNode({
   canEdit,
   drawing,
   onDraft,
+  openedAt,
   onCommit,
   onNodeDown,
+  onNodeClick,
   onResizeDown,
   onEdit,
   onFit,
@@ -842,8 +1065,10 @@ function CardNode({
   canEdit: boolean
   drawing: boolean
   onDraft: (value: string) => void
+  openedAt: number
   onCommit: () => void
   onNodeDown: (event: ReactPointerEvent, item: CanvasItem) => void
+  onNodeClick: (event: ReactMouseEvent, item: CanvasItem) => void
   onResizeDown: (event: ReactPointerEvent<HTMLButtonElement>, item: CanvasItem, corner: Corner) => void
   onEdit: () => void
   onFit: (natural: { w: number; h: number }) => void
@@ -874,9 +1099,10 @@ function CardNode({
         filter: shape ? `drop-shadow(0 ${4 / scale}px ${12 / scale}px rgba(60,40,20,.12))` : undefined,
         outline: active && !inkItem ? `${2 / scale}px dashed #1f7a54` : 'none',
         outlineOffset: active ? `${4 / scale}px` : undefined,
-        pointerEvents: inkItem ? 'none' : undefined,
+        pointerEvents: drawing || inkItem ? 'none' : undefined,
       }}
       onPointerDown={inkItem ? undefined : (event) => onNodeDown(event, item)}
+      onClick={(event) => onNodeClick(event, item)}
       onDoubleClick={(event) => {
         event.stopPropagation()
         onEdit()
@@ -921,7 +1147,14 @@ function CardNode({
           }}
           onChange={(event) => onDraft(event.target.value)}
           onPointerDown={(event) => event.stopPropagation()}
-          onBlur={onCommit}
+          onBlur={(event) => {
+            if (performance.now() - openedAt < 400) {
+              const field = event.currentTarget
+              setTimeout(() => field.focus(), 0)
+              return
+            }
+            onCommit()
+          }}
         />
       ) : graphic ? (
         caption ? (
@@ -937,7 +1170,7 @@ function CardNode({
           )}
           style={{ fontSize, fontWeight: isText ? 600 : 500 }}
         >
-          {item.text ? <RichNote text={item.text} /> : active && canEdit ? '按兩下打字' : ''}
+          {item.text ? <RichNote text={item.text} /> : active && canEdit ? '再按一下打字' : ''}
         </div>
       )}
       {active && canEdit &&
@@ -1033,6 +1266,22 @@ function EditBar({
       <ToolButton label="刪除" tone="#b91c1c" disabled={!canDelete} onClick={onDelete}>
         <Trash2 className="h-6 w-6" />
       </ToolButton>
+    </>
+  )
+}
+
+function DockZoom({ onOut, onFit, onIn }: { onOut: () => void; onFit: () => void; onIn: () => void }) {
+  return (
+    <>
+      <button type="button" className="dock-zoom pressable grid h-14 min-h-11 min-w-11 shrink-0 place-items-center rounded-xl px-2 text-base font-bold hover:bg-white/70" onClick={onOut} aria-label="縮小">
+        縮小
+      </button>
+      <button type="button" className="dock-zoom pressable grid h-14 min-h-11 min-w-11 shrink-0 place-items-center rounded-xl px-2 text-base font-bold hover:bg-white/70" onClick={onFit} aria-label="整頁">
+        整頁
+      </button>
+      <button type="button" className="dock-zoom pressable grid h-14 min-h-11 min-w-11 shrink-0 place-items-center rounded-xl px-2 text-base font-bold hover:bg-white/70" onClick={onIn} aria-label="放大">
+        放大
+      </button>
     </>
   )
 }

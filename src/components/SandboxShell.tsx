@@ -119,7 +119,7 @@ export function SandboxShell({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
       <aside className="hidden w-[148px] shrink-0 flex-col border-r border-line bg-cream lg:flex">
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           <Filmstrip
@@ -198,7 +198,7 @@ export function SandboxShell({
           </div>
         )}
       </div>
-      <div className="board-filmstrip flex shrink-0 items-stretch gap-2 overflow-x-auto border-t border-line bg-cream p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
+      <div className="board-filmstrip flex w-full min-w-0 max-w-full shrink-0 items-stretch gap-2 overflow-x-auto border-t border-line bg-cream p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
         <Filmstrip
           pages={pages}
           items={items}

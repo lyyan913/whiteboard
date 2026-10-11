@@ -255,29 +255,32 @@ textarea {
 
   .tool-dock {
     gap: 2px !important;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     padding: 2px !important;
     border-radius: 16px;
-    scrollbar-width: none;
-  }
-
-  .tool-dock::-webkit-scrollbar {
-    display: none;
+    overflow: visible;
   }
 
   .dock-stack {
-    flex-direction: row !important;
-    flex-wrap: nowrap;
-    align-items: center;
-    overflow-x: auto;
+    flex-direction: column !important;
+    align-items: stretch;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0;
+    overflow: visible !important;
   }
 
   .dock-row,
   .dock-panel {
     flex: none;
-    width: max-content;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0;
+    flex-wrap: wrap !important;
+    justify-content: center;
     overflow: visible !important;
-    border-top-width: 0 !important;
-    padding-top: 0 !important;
   }
 
   .tool-dock button,
@@ -318,13 +321,21 @@ textarea {
     display: none;
   }
 
+  .dock-zoom {
+    width: 44px !important;
+    min-width: 44px !important;
+    padding: 0 !important;
+    font-size: 12px;
+    line-height: 1.05;
+  }
+
   .tool-dock .color-dot {
     width: 44px !important;
     height: 44px !important;
   }
 }
 
-@media (min-width: 744px) and (max-width: 1399px) and (min-height: 501px) {
+@media (min-width: 744px) and (min-height: 501px) {
   .board-desktop-only,
   .board-compact-only {
     display: none !important;
@@ -337,6 +348,7 @@ textarea {
   .tool-dock .tool-btn,
   .tool-dock label.tool-btn,
   .dock-undo,
+  .dock-zoom,
   .tool-dock .color-dot,
   .dock-panel button,
   .dock-row button {
@@ -368,6 +380,12 @@ textarea {
 
   .dock-undo-label {
     display: inline !important;
+  }
+
+  .dock-zoom {
+    width: auto !important;
+    min-width: 52px !important;
+    padding: 0 10px !important;
   }
 
   .tool-dock .color-dot {
