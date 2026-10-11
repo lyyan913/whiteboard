@@ -6,10 +6,12 @@ export function PopoverMenu({
   label,
   icon = false,
   children,
+  triggerClassName,
 }: {
   label: string
   icon?: boolean
   children: ReactNode
+  triggerClassName?: string
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -39,19 +41,19 @@ export function PopoverMenu({
           aria-expanded={open}
           aria-haspopup="menu"
           onClick={() => setOpen((value) => !value)}
-          className="grid h-[52px] w-[52px] place-items-center rounded-2xl text-2xl font-bold leading-none text-ink hover:bg-cream"
+          className={cn('grid h-[52px] w-[52px] place-items-center rounded-2xl text-2xl font-bold leading-none text-ink hover:bg-cream', triggerClassName)}
         >
           ⋯
         </button>
       ) : (
-        <Button type="button" variant="outline" aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>
+        <Button type="button" variant="outline" className={triggerClassName} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((value) => !value)}>
           {label}
         </Button>
       )}
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-50 mt-2 w-60 rounded-2xl border border-line bg-paper p-2 shadow-xl"
+          className="absolute right-0 z-50 mt-2 max-h-[min(70dvh,28rem)] w-64 overflow-y-auto rounded-2xl border border-line bg-paper p-2 shadow-xl"
           onClick={() => setOpen(false)}
         >
           {children}
@@ -65,20 +67,28 @@ export function MenuItem({
   children,
   onClick,
   pressed,
+  keepOpen = false,
+  className,
 }: {
   children: ReactNode
   onClick: () => void
   pressed?: boolean
+  keepOpen?: boolean
+  className?: string
 }) {
   return (
     <button
       type="button"
       role="menuitem"
       aria-pressed={pressed}
-      onClick={onClick}
+      onClick={(event) => {
+        if (keepOpen) event.stopPropagation()
+        onClick()
+      }}
       className={cn(
         'flex min-h-[52px] w-full items-center rounded-xl px-3 text-left text-base font-semibold hover:bg-cream',
         pressed && 'bg-cream',
+        className,
       )}
     >
       {children}

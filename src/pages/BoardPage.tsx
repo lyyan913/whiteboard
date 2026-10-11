@@ -627,7 +627,7 @@ export function BoardPage() {
   const needsNickname = role === 'student' && !nickname.trim()
 
   return (
-    <div className={board.type === 'wall' ? 'min-h-dvh' : 'flex h-dvh flex-col'}>
+    <div className={board.type === 'wall' ? 'min-h-dvh' : 'flex h-dvh flex-col overflow-hidden'}>
       <BoardChrome
         board={board}
         role={phase.role}
@@ -648,12 +648,12 @@ export function BoardPage() {
         onAdd={board.type === 'wall' && (!board.locked || phase.role === 'teacher') ? () => ensureNickname(() => setComposer(null)) : undefined}
       />
       {banner && (
-        <p role="alert" className="bg-red-50 px-4 py-2 text-sm text-stamp">
+        <p role="alert" className="board-banner bg-red-50 px-4 py-2 text-sm text-stamp">
           {banner}
         </p>
       )}
       {board.locked && (
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-amber-100 px-4 py-3 text-base text-ink">
+        <div className="board-banner flex flex-wrap items-center justify-between gap-3 bg-amber-100 px-4 py-3 text-base text-ink">
           <p className="font-semibold text-warn">
             {board.type === 'sandbox' ? '老師已暫停編輯' : '現已鎖定，學生暫時不能新增貼文。'}
           </p>
@@ -665,7 +665,7 @@ export function BoardPage() {
         </div>
       )}
       {needsNickname && !nickOpen && (
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-paper px-4 py-3 text-base">
+        <div className="board-banner flex flex-wrap items-center justify-between gap-3 bg-paper px-4 py-3 text-base">
           <p>你叫什麼名字？其他同學會看到這個名字。</p>
           <Button type="button" size="lg" onClick={() => setNickOpen(true)}>
             開始

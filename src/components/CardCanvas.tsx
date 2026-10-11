@@ -6,6 +6,7 @@ import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk, type FillMod
 import { isAllowedImageUrl } from '../../shared/media'
 import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
 import { makeId } from '../../shared/text'
+import { DockHistory } from '@/components/DockHistory'
 import { Markup } from '@/components/Markup'
 import { CARD_H, CARD_W, cardBounds, clampToCard } from '@/components/cardFrame'
 import { RichNote } from '@/components/RichNote'
@@ -530,9 +531,9 @@ export function CardCanvas({
   const liveInk = ink && ink.length > 1 ? inkFrame(ink, 0) : null
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col bg-cream">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-cream">
       <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-auto">
-        <div key={pageId} className={cn('flex min-h-full min-w-full items-center justify-center p-3', ready ? 'page-fade' : 'opacity-0')}>
+        <div key={pageId} className={cn('card-stage flex min-h-full min-w-full items-center justify-center p-3', ready ? 'page-fade' : 'opacity-0')}>
           <div style={{ width: bounds.w * scale, height: bounds.h * scale }}>
             <div
               ref={worldRef}
@@ -616,12 +617,11 @@ export function CardCanvas({
             </div>
           </div>
         </div>
-      </div>
-      {items.length === 0 && !draft && (
-        <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center px-6 text-center">
-          <div className="max-w-md rounded-2xl bg-white/90 px-5 py-4 shadow-sm">
-            <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '老師已暫停編輯' : '這個版面尚未有內容'}</p>
-            <ol className="mt-3 space-y-1 text-left text-lg text-muted">
+        {items.length === 0 && !draft && (
+          <div className="board-empty pointer-events-none absolute inset-0 z-10 grid place-items-center px-4 text-center">
+            <div className="max-w-md rounded-2xl bg-white/90 px-4 py-3 shadow-sm">
+              <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '老師已暫停編輯' : '這個版面尚未有內容'}</p>
+              <ol className="mt-3 space-y-1 text-left text-lg text-muted">
               {locked && role !== 'teacher' ? (
                 <li>現在只可以看。</li>
               ) : (
@@ -631,39 +631,29 @@ export function CardCanvas({
                 </>
               )}
             </ol>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      <div className="z-20 px-3 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1">
+      <div className="z-20 shrink-0 px-2 pb-1 pt-1">
         <div
           data-toolbar
-          className="tool-dock mx-auto flex max-w-full flex-col gap-1 p-1.5"
+          className="tool-dock dock-stack mx-auto flex max-w-full flex-col gap-1 p-1.5"
           onPointerDown={(event) => {
             if (!editingRef.current) return
             if ((event.target as HTMLElement).closest('[data-commit]')) return
             event.preventDefault()
           }}
         >
-          <div className="flex items-center gap-1 overflow-x-auto">
-            <button
-              type="button"
-              disabled={!history.canUndo}
-              onClick={() => void history.undo()}
-              className="pressable grid h-14 min-w-[5.75rem] shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
-            >
-              復原上一筆
-            </button>
-            <button
-              type="button"
-              disabled={!history.canRedo}
-              onClick={() => void history.redo()}
-              className="pressable grid h-14 min-w-16 shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
-            >
-              重做
-            </button>
-          </div>
           {selectedItem && canEdit ? (
+            <div className="dock-row flex items-center gap-1 overflow-x-auto">
+            <DockHistory
+              canUndo={history.canUndo}
+              canRedo={history.canRedo}
+              onUndo={() => void history.undo()}
+              onRedo={() => void history.redo()}
+            />
             <EditBar
               item={selectedItem}
               editing={editing === selectedItem.id}
@@ -681,9 +671,16 @@ export function CardCanvas({
                 setSelected(null)
               }}
             />
+            </div>
           ) : (
             <>
-              <div className="flex items-center gap-1 overflow-x-auto">
+              <div className="dock-row flex items-center gap-1 overflow-x-auto">
+                <DockHistory
+                  canUndo={history.canUndo}
+                  canRedo={history.canRedo}
+                  onUndo={() => void history.undo()}
+                  onRedo={() => void history.redo()}
+                />
                 {TOOLS.map((entry) => (
                   <ToolButton
                     key={entry.id}
@@ -698,13 +695,13 @@ export function CardCanvas({
                 ))}
                 <label
                   className={cn(
-                    'pressable relative flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[13px] font-semibold',
+                    'tool-btn pressable relative flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[13px] font-semibold',
                     !canEdit && 'opacity-40',
                   )}
                   style={{ color: '#1f7a54' }}
                 >
                   <ImageIcon className="h-6 w-6" />
-                  相片
+                  <span className="tool-caption">相片</span>
                   <input
                     type="file"
                     accept="image/*"
@@ -715,7 +712,7 @@ export function CardCanvas({
                 </label>
               </div>
               {(tool === 'text' || tool === 'sticky' || inkOpen) && (
-                <div className="flex items-center gap-1 overflow-x-auto border-t border-line pt-1">
+                <div className="dock-panel flex items-center gap-1 overflow-x-auto border-t border-line pt-1">
                   {(tool === 'text' ? TEXT_COLORS : tool === 'sticky' ? NOTE_COLORS : DRAW_COLORS).map((swatch) => (
                     <ColorDot
                       key={swatch}
@@ -1063,14 +1060,14 @@ function ToolButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'pressable flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[13px] font-semibold',
+        'tool-btn pressable flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[13px] font-semibold',
         pressed ? 'text-white' : 'hover:bg-white/70',
         disabled && 'opacity-40',
       )}
       style={{ background: pressed ? tone : 'transparent', color: pressed ? '#fff' : tone }}
     >
       {children}
-      {label}
+      <span className="tool-caption">{label}</span>
     </button>
   )
 }
@@ -1095,7 +1092,7 @@ function ColorDot({
       aria-pressed={pressed}
       disabled={disabled}
       onClick={onClick}
-      className={cn('pressable h-12 w-12 shrink-0 rounded-xl border-4', pressed ? 'border-ink' : 'border-white')}
+      className={cn('color-dot pressable h-12 w-12 shrink-0 rounded-xl border-4', pressed ? 'border-ink' : 'border-white')}
       style={{ background: swatch }}
     />
   )

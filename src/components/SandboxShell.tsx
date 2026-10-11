@@ -139,7 +139,7 @@ export function SandboxShell({
       </aside>
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {active && (
-          <div className="flex items-center gap-2 border-b border-line bg-cream px-3 py-1">
+          <div className="board-page-title flex items-center gap-2 border-b border-line bg-cream px-3 py-1">
             <h2 className="min-w-0 flex-1 truncate font-serif text-2xl font-bold">
               <span className="mr-2 text-stamp">{cardNo(activeIndex)}</span>
               {active.title}
@@ -153,7 +153,7 @@ export function SandboxShell({
           </div>
         )}
         {hint && active && (
-          <div className="pointer-events-none absolute left-1/2 top-16 z-30 -translate-x-1/2 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow">
+          <div className="board-coedit-hint pointer-events-none absolute left-1/2 top-16 z-30 -translate-x-1/2 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow">
             這一版大家可以一起修改
           </div>
         )}
@@ -198,7 +198,7 @@ export function SandboxShell({
           </div>
         )}
       </div>
-      <div className="flex items-stretch gap-2 overflow-x-auto border-t border-line bg-cream p-2 lg:hidden">
+      <div className="board-filmstrip flex shrink-0 items-stretch gap-2 overflow-x-auto border-t border-line bg-cream p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
         <Filmstrip
           pages={pages}
           items={items}
@@ -374,11 +374,11 @@ function CardButton({
     >
       <CardThumb items={preview} tone={tone} />
       <span className="text-base font-bold leading-none text-stamp">{cardNo(index)}</span>
-      <span className="flex w-full min-w-0 items-center justify-center gap-1 px-1">
+      <span className="thumb-name flex w-full min-w-0 items-center justify-center gap-1 px-1">
         <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: tone }} />
         <span className="truncate text-sm font-semibold leading-tight">{shortName(page.title)}</span>
       </span>
-      <span className="text-xs text-muted">{count} 件</span>
+      <span className="thumb-count text-xs text-muted">{count} 件</span>
     </button>
   )
 }
@@ -389,7 +389,7 @@ function CardThumb({ items, tone }: { items: CanvasItem[]; tone: string }) {
   const height = Math.max(64, Math.round((width * bounds.h) / bounds.w))
   const scale = width / bounds.w
   return (
-    <span className="relative block overflow-hidden rounded-lg bg-[#fbf5ea] shadow-sm ring-1 ring-[rgba(31,26,20,.08)]" style={{ width, height }}>
+    <span className="card-thumb relative block overflow-hidden rounded-lg bg-[#fbf5ea] shadow-sm ring-1 ring-[rgba(31,26,20,.08)]" style={{ width, height }}>
       <span aria-hidden className="absolute inset-y-0 left-0 z-10 w-1.5" style={{ background: tone }} />
       <span
         className="absolute left-0 top-0 block"
@@ -434,7 +434,7 @@ function AddCardButton({ onClick, compact = false }: { onClick: () => void; comp
       type="button"
       onClick={onClick}
       className={cn(
-        'pressable flex shrink-0 items-center justify-center rounded-2xl bg-stamp font-semibold text-white',
+        'add-card pressable flex shrink-0 items-center justify-center rounded-2xl bg-stamp font-semibold text-white',
         compact ? 'min-h-[92px] min-w-[92px] px-3 text-base' : 'min-h-14 w-full px-2 text-base',
       )}
     >

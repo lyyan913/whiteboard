@@ -6,6 +6,7 @@ import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk } from '../..
 import { isAllowedImageUrl } from '../../shared/media'
 import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
 import { makeId } from '../../shared/text'
+import { DockHistory } from '@/components/DockHistory'
 import { Markup } from '@/components/Markup'
 import { RichNote } from '@/components/RichNote'
 import { loadImageSize } from '@/lib/fitImage'
@@ -524,13 +525,14 @@ export function CanvasView({
   const liveFrame = liveInk ? inkFrame(liveInk, 8) : null
 
   return (
-    <div className="relative min-h-0 flex-1 bg-cream">
+    <div className="relative flex min-h-0 flex-1 flex-col bg-cream">
+      <div className="relative min-h-0 flex-1">
       {hint && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow">
           拖動貼文可以擺位
         </div>
       )}
-      <div ref={viewportRef} className="canvas-sheet absolute inset-2 overflow-hidden sm:inset-3" onPointerDown={onBackgroundDown}>
+      <div ref={viewportRef} className="canvas-sheet board-sheet absolute inset-2 overflow-hidden sm:inset-3" onPointerDown={onBackgroundDown}>
         <div ref={dotsRef} className="canvas-dots pointer-events-none absolute inset-0" />
         <div ref={worldRef} className="absolute left-0 top-0 origin-top-left">
           {ordered.map((item) => {
@@ -690,19 +692,19 @@ export function CanvasView({
           )}
         </div>
         {items.length === 0 && !draft && (
-          <div className="pointer-events-none absolute inset-0 grid place-items-center px-6 text-center">
-            <div className="max-w-sm rounded-2xl bg-paper/95 p-5 shadow">
+          <div className="board-empty pointer-events-none absolute inset-0 grid place-items-center px-4 text-center">
+            <div className="max-w-sm rounded-2xl bg-paper/95 p-4 shadow">
               <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '畫布已鎖定' : '這塊畫布還是空的'}</p>
-              <p className="mt-2 text-base leading-7 text-muted">
+              <p className="board-empty-note mt-2 text-base leading-7 text-muted">
                 {locked && role !== 'teacher' ? '現在只可以看，還不能新增貼文。' : '在下面選擇工具，再在空白處按一下。'}
               </p>
             </div>
           </div>
         )}
       </div>
-
-      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-3 pb-[env(safe-area-inset-bottom)] sm:bottom-5">
-        <div data-toolbar className="tool-dock pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto p-2">
+      </div>
+      <div className="board-dock pointer-events-none z-20 flex shrink-0 justify-center px-2">
+        <div data-toolbar className="tool-dock dock-row pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto p-2">
           {TOOLS.map((entry) => {
             const pressed = tool === entry.id
             return (
@@ -712,18 +714,21 @@ export function CanvasView({
                 disabled={!canEdit && entry.id !== 'select'}
                 aria-pressed={pressed}
                 onClick={() => chooseTool(entry.id)}
-                className={cn('pressable flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold', pressed ? 'text-white' : 'hover:bg-white/70')}
+                className={cn('tool-btn pressable flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold', pressed ? 'text-white' : 'hover:bg-white/70')}
                 style={{ background: pressed ? entry.tone : 'transparent', color: pressed ? '#fff' : entry.tone }}
               >
                 <entry.icon className="h-4 w-4" />
-                {entry.label}
+                <span className="tool-caption">{entry.label}</span>
               </button>
             )
           })}
           {onUpload && (
-            <label className={cn('pressable relative flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold', !canEdit && 'opacity-40')} style={{ color: '#1f7a54' }}>
+            <label
+              className={cn('tool-btn pressable relative flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold', !canEdit && 'opacity-40')}
+              style={{ color: '#1f7a54' }}
+            >
               <ImageIcon className="h-4 w-4" />
-              相片
+              <span className="tool-caption">相片</span>
               <input type="file" accept="image/*" disabled={!canEdit} className="absolute inset-0 cursor-pointer opacity-0" onChange={(event) => void onPhoto(event)} />
             </label>
           )}
@@ -736,27 +741,17 @@ export function CanvasView({
               aria-pressed={color === swatch}
               disabled={!canEdit}
               onClick={() => setColor(swatch)}
-              className={cn('pressable h-11 w-11 shrink-0 rounded-xl border-4', color === swatch ? 'border-ink' : 'border-white')}
+              className={cn('color-dot pressable h-11 w-11 shrink-0 rounded-xl border-4', color === swatch ? 'border-ink' : 'border-white')}
               style={{ background: swatch }}
             />
           ))}
           <span className="mx-1 h-8 w-px bg-line" />
-          <button
-            type="button"
-            disabled={!history.canUndo}
-            onClick={() => void history.undo()}
-            className="pressable grid h-14 min-w-[5.75rem] shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
-          >
-            復原上一筆
-          </button>
-          <button
-            type="button"
-            disabled={!history.canRedo}
-            onClick={() => void history.redo()}
-            className="pressable grid h-14 min-w-16 shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
-          >
-            重做
-          </button>
+          <DockHistory
+            canUndo={history.canUndo}
+            canRedo={history.canRedo}
+            onUndo={() => void history.undo()}
+            onRedo={() => void history.redo()}
+          />
           <IconButton label="縮小" onClick={() => zoomBy(1 / 1.15)}>
             <ZoomOut className="h-4 w-4" />
           </IconButton>
@@ -798,7 +793,7 @@ function IconButton({
   children: ReactNode
 }) {
   return (
-    <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="pressable grid h-[52px] w-[52px] shrink-0 place-items-center rounded-xl hover:bg-white/70 disabled:opacity-40">
+    <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="tool-btn pressable grid h-[52px] w-[52px] shrink-0 place-items-center rounded-xl hover:bg-white/70 disabled:opacity-40">
       {children}
     </button>
   )
