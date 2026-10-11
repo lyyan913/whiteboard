@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button'
 import { classroomUrl, copyText } from '@/lib/share'
 import { cn } from '@/lib/utils'
 
-const BOARD_MARK: Record<BoardType, { Icon: typeof Pin; label: string }> = {
-  sandbox: { Icon: BookOpen, label: '作品集' },
-  canvas: { Icon: Palette, label: '畫布' },
-  wall: { Icon: Pin, label: '壁報板' },
+const BOARD_MARK: Record<BoardType, { Icon: typeof Pin }> = {
+  sandbox: { Icon: BookOpen },
+  canvas: { Icon: Palette },
+  wall: { Icon: Pin },
 }
 
 const AVATAR_COLORS = ['#e07b24', '#1f7a54', '#1d4e89', '#6b4c9a', '#d6457a', '#c99a06', '#c4492c']
@@ -99,7 +99,6 @@ export function BoardChrome({
             <h1 className="flex min-w-0 items-center gap-2 font-serif text-3xl font-bold leading-tight sm:text-4xl">
               <mark.Icon className="h-7 w-7 shrink-0 text-stamp sm:h-8 sm:w-8" aria-hidden />
               <span className="truncate">{board.title}</span>
-              <span className="sr-only">{mark.label}</span>
             </h1>
             <div className="flex flex-wrap items-center gap-x-2 text-sm text-muted">
               {board.groupLabel && <span>{board.groupLabel}</span>}
