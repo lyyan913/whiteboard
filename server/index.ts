@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import { createServer } from 'node:http'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { uploadDir } from './db'
+import { purgeExpiredDrops, uploadDir } from './db'
 import { attachWebsocket } from './hub'
 import { createApi, errorHandler } from './routes'
 
@@ -25,6 +25,14 @@ app.use('/uploads', express.static(uploadDir, { index: false, maxAge: '7d', fall
 
 const server = createServer(app)
 attachWebsocket(server)
+purgeExpiredDrops()
+setInterval(() => {
+  try {
+    purgeExpiredDrops()
+  } catch (error) {
+    console.error(error)
+  }
+}, 60 * 60 * 1000)
 
 if (isProd) {
   const dist = path.join(root, 'dist')

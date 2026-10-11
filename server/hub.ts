@@ -22,12 +22,13 @@ function people(boardId: string): Person[] {
   return [...room].map((client) => ({ id: client.id, name: client.name }))
 }
 
-export function broadcast(boardId: string, message: ServerMessage, except?: WebSocket) {
+export function broadcast(boardId: string, message: ServerMessage, except?: WebSocket, audience?: Role) {
   const room = rooms.get(boardId)
   if (!room) return
   const payload = JSON.stringify(message)
   for (const client of room) {
     if (client.ws === except) continue
+    if (audience && client.role !== audience) continue
     if (client.ws.readyState === client.ws.OPEN) client.ws.send(payload)
   }
 }

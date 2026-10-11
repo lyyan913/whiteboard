@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { extractYouTubeId } from '../../shared/media'
-import type { Board, BoardMeta, CanvasItem, ItemCreate, JoinResponse, Post, Role, SandboxPage, ServerMessage, StateResponse, WallLayout } from '../../shared/types'
+import type { Board, BoardMeta, CanvasItem, DropFile, DropFolder, ItemCreate, JoinResponse, Post, Role, SandboxPage, ServerMessage, StateResponse, WallLayout } from '../../shared/types'
 import { BoardSettingsDialog, ShareDialog } from '@/components/BoardDialogs'
+import { DropFolderDialog, DropQrDialog, JoinQrDialog } from '@/components/DropTools'
 import { BoardChrome } from '@/components/BoardChrome'
 import { CanvasView } from '@/components/CanvasView'
 import { Logo } from '@/components/Logo'
@@ -51,6 +52,11 @@ export function BoardPage() {
   const [composer, setComposer] = useState<Post | null | undefined>(undefined)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
+  const [qrOpen, setQrOpen] = useState(false)
+  const [joinOpen, setJoinOpen] = useState(false)
+  const [folderOpen, setFolderOpen] = useState(false)
+  const [drops, setDrops] = useState<DropFile[]>([])
+  const [dropsPaused, setDropsPaused] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Post | CanvasItem | null>(null)
   const [activePageId, setActivePageId] = useState<string | null>(null)
   const [pendingPageDelete, setPendingPageDelete] = useState<string | null>(null)
@@ -62,9 +68,45 @@ export function BoardPage() {
 
   const readyToken = phase.kind === 'ready' ? phase.token : null
   const role = phase.kind === 'ready' ? phase.role : null
+  const readyTeacher = phase.kind === 'ready' && phase.role === 'teacher'
+
+  useEffect(() => {
+    if (!readyTeacher) return
+    let cancelled = false
+    async function loadDrops() {
+      try {
+        const folder = await api<DropFolder>(`/api/boards/${boardId}/drops`, { token: getTeacherToken() })
+        if (cancelled) return
+        setDrops(folder.files)
+        setDropsPaused(folder.paused)
+      } catch {
+        /* teacher token can be missing on a shared computer */
+      }
+    }
+    void loadDrops()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void loadDrops()
+    }, 8000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [readyTeacher, boardId])
   if (phase.kind === 'ready') tokenRef.current = phase.token
 
   const onSocket = useCallback((message: ServerMessage) => {
+    if (message.type === 'drop.created') {
+      setDrops((list) => upsert(list, message.file))
+      return
+    }
+    if (message.type === 'drop.deleted') {
+      setDrops((list) => list.filter((file) => file.id !== message.id))
+      return
+    }
+    if (message.type === 'drop.paused') {
+      setDropsPaused(message.paused)
+      return
+    }
     setPhase((prev) => {
       if (prev.kind !== 'ready') return prev
       if (message.type === 'board.deleted') return { kind: 'deleted' }
@@ -578,7 +620,11 @@ export function BoardPage() {
         status={status}
         nickname={nickname}
         onNickname={() => setNickOpen(true)}
-        onShare={() => setShareOpen(true)}
+        onShare={() => setQrOpen(true)}
+        onJoin={() => setJoinOpen(true)}
+        onLink={() => setShareOpen(true)}
+        onFolder={() => setFolderOpen(true)}
+        dropCount={drops.length}
         classroomId={roomQuery || readStorage(sessionStorage, `tongchung.room.${boardId}`) || undefined}
         onSettings={phase.role === 'teacher' ? () => setSettingsOpen(true) : undefined}
         onLockToggle={phase.role === 'teacher' ? () => void toggleLock() : undefined}
@@ -701,6 +747,41 @@ export function BoardPage() {
         />
       )}
       <ShareDialog board={board} open={shareOpen} onOpenChange={setShareOpen} />
+      {phase.role === 'teacher' && (
+        <>
+          <JoinQrDialog board={board} open={joinOpen} onOpenChange={setJoinOpen} />
+          <DropQrDialog
+            boardId={board.id}
+            title={board.title}
+            paused={dropsPaused}
+            open={qrOpen}
+            onOpenChange={setQrOpen}
+            onPaused={setDropsPaused}
+          />
+          <DropFolderDialog
+            boardId={board.id}
+            files={drops}
+            paused={dropsPaused}
+            pageId={activePageId}
+            needsPage={board.type === 'sandbox'}
+            open={folderOpen}
+            onOpenChange={setFolderOpen}
+            onPaused={setDropsPaused}
+            onPlaced={(result) => {
+              setPhase((prev) =>
+                prev.kind === 'ready'
+                  ? {
+                      ...prev,
+                      posts: result.posts.reduce((list, post) => upsert(list, post), prev.posts),
+                      items: result.items.reduce((list, item) => upsert(list, item), prev.items),
+                    }
+                  : prev,
+              )
+            }}
+            onDeleted={(id) => setDrops((list) => list.filter((file) => file.id !== id))}
+          />
+        </>
+      )}
       {phase.role === 'teacher' && (
         <BoardSettingsDialog
           board={board}

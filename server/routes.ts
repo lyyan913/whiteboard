@@ -24,6 +24,17 @@ import {
   countPages,
   countPosts,
   createBoard,
+  dropDir,
+  dropFilePath,
+  dropsPaused,
+  ensureDropToken,
+  purgeExpiredDrops,
+  getBoardByDropToken,
+  getDropFile,
+  insertDropFile,
+  listDropFiles,
+  removeDropFile,
+  setDropsPaused,
   createWorkspace,
   deleteBoard,
   countPageItems,
@@ -59,6 +70,7 @@ import {
   uploadDir,
 } from './db'
 import { broadcast } from './hub'
+import { configuredPublicOrigin } from '../shared/joinUrl'
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -129,6 +141,14 @@ function sniffImage(buffer: Buffer) {
   return null
 }
 
+function sniffDrop(buffer: Buffer): { ext: 'jpg' | 'png' | 'gif' | 'webp' | 'pdf'; kind: 'image' | 'pdf' } | 'heic' | null {
+  if (buffer.length > 5 && buffer.subarray(0, 5).toString('ascii') === '%PDF-') return { ext: 'pdf', kind: 'pdf' }
+  const image = sniffImage(buffer)
+  if (image === 'heic') return 'heic'
+  if (image === 'jpg' || image === 'png' || image === 'gif' || image === 'webp') return { ext: image, kind: 'image' }
+  return null
+}
+
 function readString(body: unknown, key: string) {
   if (!body || typeof body !== 'object') return undefined
   const value = (body as Record<string, unknown>)[key]
@@ -140,6 +160,10 @@ export function createApi() {
 
   router.get('/health', (_req, res) => {
     res.json({ ok: true })
+  })
+
+  router.get('/config', (_req, res) => {
+    res.json({ publicOrigin: configuredPublicOrigin() })
   })
 
   router.get('/classrooms/:workspaceId', (req, res) => {
@@ -678,6 +702,187 @@ export function createApi() {
     })
   })
 
+  router.get('/boards/:boardId/drops', (req, res) => {
+    const teacher = teacherOf(req)
+    purgeExpiredDrops()
+    const row = ownedBoard(teacher.wid, req.params.boardId)
+    const token = ensureDropToken(row.id)
+    if (!token) throw new HttpError(404, '找不到壁報')
+    res.json({ token, paused: dropsPaused(row), files: listDropFiles(row.id) })
+  })
+
+  router.patch('/boards/:boardId/drops', (req, res) => {
+    const teacher = teacherOf(req)
+    const row = ownedBoard(teacher.wid, req.params.boardId)
+    if (typeof req.body?.paused !== 'boolean') throw new HttpError(400, '請再試一次')
+    setDropsPaused(row.id, req.body.paused)
+    const next = getBoardRow(row.id)
+    if (!next) throw new HttpError(404, '找不到壁報')
+    broadcast(row.id, { type: 'drop.paused', paused: dropsPaused(next) }, undefined, 'teacher')
+    const token = ensureDropToken(row.id)
+    res.json({ token, paused: dropsPaused(next), files: listDropFiles(row.id) })
+  })
+
+  router.get('/boards/:boardId/drops/:fileId/file', (req, res) => {
+    const teacher = teacherOf(req)
+    purgeExpiredDrops()
+    const row = ownedBoard(teacher.wid, req.params.boardId)
+    const found = getDropFile(row.id, req.params.fileId)
+    if (!found) throw new HttpError(404, '找不到檔案')
+    const stored = dropFilePath(found.storedName)
+    if (!stored || !fs.existsSync(stored)) throw new HttpError(404, '找不到檔案')
+    const type = found.file.kind === 'pdf' ? 'application/pdf' : found.storedName.endsWith('.png') ? 'image/png' : found.storedName.endsWith('.gif') ? 'image/gif' : found.storedName.endsWith('.webp') ? 'image/webp' : 'image/jpeg'
+    res.setHeader('Content-Type', type)
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(found.file.originalName)}`)
+    fs.createReadStream(stored).pipe(res)
+  })
+
+  router.delete('/boards/:boardId/drops/:fileId', (req, res) => {
+    const teacher = teacherOf(req)
+    const row = ownedBoard(teacher.wid, req.params.boardId)
+    const removed = removeDropFile(row.id, req.params.fileId)
+    if (!removed) throw new HttpError(404, '找不到檔案')
+    broadcast(row.id, { type: 'drop.deleted', id: removed.id }, undefined, 'teacher')
+    res.status(204).end()
+  })
+
+  router.post('/boards/:boardId/drops/place', (req, res) => {
+    const teacher = teacherOf(req)
+    purgeExpiredDrops()
+    const row = ownedBoard(teacher.wid, req.params.boardId)
+    const rawIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : []
+    const ids = rawIds.filter((id): id is string => typeof id === 'string').slice(0, 24)
+    if (ids.length === 0) throw new HttpError(400, '請先揀檔案')
+    const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : ''
+    let page: ReturnType<typeof getPage> | undefined
+    if (row.type === 'sandbox') {
+      page = pageId ? getPage(row.id, pageId) : undefined
+      if (!page) throw new HttpError(400, '請先揀一個版面')
+      if (countPageItems(page.id) + ids.length > 400) throw new HttpError(400, '這個版面的物件已達上限')
+    } else if (row.type === 'canvas') {
+      if (countItems(row.id) + ids.length > 400) throw new HttpError(400, '畫布物件已達上限')
+    } else if (row.type === 'wall') {
+      if (countPosts(row.id) + ids.length > 400) throw new HttpError(400, '這塊壁報的貼文已達上限')
+    }
+    const ready = ids.map((id: string) => {
+      const found = getDropFile(row.id, id)
+      if (!found) throw new HttpError(404, '找不到檔案')
+      const stored = dropFilePath(found.storedName)
+      if (!stored || !fs.existsSync(stored)) throw new HttpError(404, '找不到檔案')
+      const buffer = fs.readFileSync(stored)
+      const sniffed = sniffDrop(buffer)
+      if (!sniffed || sniffed === 'heic') throw new HttpError(400, '這個檔案未能放上板')
+      return { found, buffer, sniffed }
+    })
+    const posts: Post[] = []
+    const items: CanvasItem[] = []
+    ready.forEach((entry, index) => {
+      const { found, buffer, sniffed } = entry
+      const filename = `${randomBytes(12).toString('hex')}.${sniffed.ext}`
+      fs.mkdirSync(uploadDir, { recursive: true })
+      fs.writeFileSync(path.join(uploadDir, filename), buffer)
+      const url = `/uploads/${filename}`
+      const now = Date.now()
+      if (row.type === 'wall') {
+        const spot = nextWallSpot(row.id)
+        const post: Post = {
+          id: makeId(12),
+          boardId: row.id,
+          authorName: found.file.authorName,
+          clientId: 'teacher-drop',
+          kind: sniffed.kind === 'pdf' ? 'text' : 'image',
+          body: sniffed.kind === 'pdf' ? `PDF：${found.file.originalName}\n${url}` : '',
+          mediaUrl: sniffed.kind === 'pdf' ? null : url,
+          x: spot.x,
+          y: spot.y,
+          z: nextZ('posts', row.id),
+          color: '#ffe9a0',
+          createdAt: now,
+          updatedAt: now,
+        }
+        const saved = insertPost(post)
+        posts.push(saved)
+        broadcast(row.id, { type: 'post.created', post: saved })
+        return
+      }
+      const item: CanvasItem = {
+        id: makeId(12),
+        boardId: row.id,
+        pageId: row.type === 'sandbox' ? page!.id : null,
+        authorName: found.file.authorName,
+        clientId: 'teacher-drop',
+        kind: sniffed.kind === 'pdf' ? 'sticky' : 'image',
+        text: sniffed.kind === 'pdf' ? `PDF：${found.file.originalName}\n${url}` : url,
+        x: 72 + (index % 3) * 36,
+        y: 72 + index * 28,
+        w: sniffed.kind === 'pdf' ? 280 : 360,
+        h: sniffed.kind === 'pdf' ? 180 : 260,
+        color: sniffed.kind === 'pdf' ? '#ffe9a0' : '#fffdf8',
+        fontSize: sniffed.kind === 'pdf' ? 18 : 28,
+        z: row.type === 'sandbox' ? nextPageZ(page!.id) : nextZ('canvas_items', row.id),
+        createdAt: now,
+        updatedAt: now,
+      }
+      const saved = insertItem(item)
+      items.push(saved)
+      broadcast(row.id, { type: 'item.created', item: saved })
+    })
+    res.status(201).json({ posts, items })
+  })
+
+  router.get('/u/:token', (req, res) => {
+    const row = getBoardByDropToken(req.params.token)
+    if (!row) throw new HttpError(404, '找不到這個上載頁')
+    res.json({
+      title: row.title,
+      hasPassword: Boolean(row.password_hash),
+      paused: dropsPaused(row),
+    })
+  })
+
+  router.post('/u/:token', (req: Request, res: Response, next: NextFunction) => {
+    upload.single('file')(req, res, (error) => {
+      if (error) {
+        next(error)
+        return
+      }
+      try {
+        const row = getBoardByDropToken(req.params.token)
+        if (!row) throw new HttpError(404, '找不到這個上載頁')
+        if (dropsPaused(row)) throw new HttpError(403, '老師暫停咗上載')
+        if (row.password_hash) {
+          const password = typeof req.body?.password === 'string' ? req.body.password : ''
+          if (!verifySecret(password, row.password_hash)) {
+            assertRateLimit(`drop:${req.ip}:${row.id}`, 40)
+            throw new HttpError(401, '密碼不正確')
+          }
+        }
+        assertRateLimit(`drop-ok:${req.ip}:${row.id}`, 80)
+        const file = req.file
+        if (!file || file.size < 32) throw new HttpError(400, '請選擇相片或 PDF')
+        const sniffed = sniffDrop(file.buffer)
+        if (sniffed === 'heic') throw new HttpError(400, '這張是 HEIC 相片。請再選一次，或在相簿改用「最相容」格式。')
+        if (!sniffed) throw new HttpError(400, '只接受相片或 PDF')
+        const storedName = `${randomBytes(12).toString('hex')}.${sniffed.ext}`
+        fs.mkdirSync(dropDir, { recursive: true })
+        fs.writeFileSync(path.join(dropDir, storedName), file.buffer)
+        const originalName = cleanText(file.originalname, 80) || (sniffed.kind === 'pdf' ? 'PDF' : '相片')
+        const authorName = cleanText(req.body?.name, 20) || '同學'
+        const saved = insertDropFile({
+          boardId: row.id,
+          authorName,
+          storedName,
+          originalName,
+          kind: sniffed.kind,
+        })
+        broadcast(row.id, { type: 'drop.created', file: saved }, undefined, 'teacher')
+        res.status(201).json({ ok: true })
+      } catch (caught) {
+        next(caught)
+      }
+    })
+  })
+
   router.use((_req, res) => {
     res.status(404).json({ error: '找不到這個路徑' })
   })
@@ -687,7 +892,7 @@ export function createApi() {
 
 export function errorHandler(error: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-    res.status(400).json({ error: '相片不能超過 12MB' })
+    res.status(400).json({ error: '檔案不能超過 12MB' })
     return
   }
   if (error instanceof HttpError) {

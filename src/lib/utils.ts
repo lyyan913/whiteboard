@@ -21,13 +21,6 @@ export function tiltOf(id: string) {
   return [-1.5, -0.6, 0.4, 1.15, -1.05, 0.85][total % 6]
 }
 
-/** Stable photo tilt between -2° and 2°, derived from the object id. */
-export function polaroidTilt(id: string) {
-  let hash = 0
-  for (const char of id) hash = (hash * 33 + char.charCodeAt(0)) >>> 0
-  return (hash % 41) / 10 - 2
-}
-
 export function readStorage(store: Storage, key: string) {
   try {
     return store.getItem(key) ?? ''

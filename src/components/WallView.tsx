@@ -1,5 +1,6 @@
 import { useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import type { Post, Role, WallLayout } from '../../shared/types'
+import { RichNote } from '@/components/RichNote'
 import { formatWhen, tiltOf } from '@/lib/utils'
 
 const WALL_WIDTH = 1200
@@ -183,7 +184,11 @@ function PostBody({ post }: { post: Post }) {
           />
         </div>
       )}
-      {post.body && <p className="whitespace-pre-wrap break-words text-lg leading-relaxed">{post.body}</p>}
+      {post.body && (
+        <p className="whitespace-pre-wrap break-words text-lg leading-relaxed">
+          <RichNote text={post.body} />
+        </p>
+      )}
     </div>
   )
 }

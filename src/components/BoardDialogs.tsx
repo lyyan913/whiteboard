@@ -1,9 +1,8 @@
-import { Check, Copy } from 'lucide-react'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { Board, BoardSummary, BoardType } from '../../shared/types'
 import { ApiError, api, getTeacherToken } from '@/lib/api'
-import { boardUrl, copyText, shareMessage } from '@/lib/share'
+import { boardUrl, copyText, loadPublicOrigin, shareMessage } from '@/lib/share'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -67,7 +66,6 @@ export function CreateBoardDialog({
   const [saving, setSaving] = useState(false)
   const [created, setCreated] = useState<BoardSummary | null>(null)
   const [advanced, setAdvanced] = useState(false)
-  const [copiedLink, setCopiedLink] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -80,7 +78,6 @@ export function CreateBoardDialog({
       setSaving(false)
       setCreated(null)
       setAdvanced(false)
-      setCopiedLink(false)
     }
   }, [open])
 
@@ -115,57 +112,23 @@ export function CreateBoardDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         {created ? (
-          created.type === 'sandbox' ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>作品集已建立</DialogTitle>
-                <DialogDescription>學生開呢條連結，揀版面，小組一齊貼成果。</DialogDescription>
-              </DialogHeader>
-              <p className="break-all rounded-2xl bg-cream px-4 py-4 text-lg font-semibold text-sky">{boardUrl(created.id)}</p>
-              <Button
-                type="button"
-                size="lg"
-                className="w-full"
-                onClick={() => {
-                  void copyText(boardUrl(created.id)).then((ok) => {
-                    if (!ok) return
-                    setCopiedLink(true)
-                    window.setTimeout(() => setCopiedLink(false), 2000)
-                  })
-                }}
-              >
-                {copiedLink ? '已複製' : '複製連結'}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="lg"
-                className="w-full"
-                onClick={() => navigate(classroomId ? `/b/${created.id}?room=${classroomId}` : `/b/${created.id}`)}
-              >
-                打開作品集
-              </Button>
-            </>
-          ) : (
-            <>
-              <DialogHeader>
-                <DialogTitle>已加入這個課室</DialogTitle>
-                <DialogDescription>學生打開課室連結，就睇到這塊板和其他人的作品。</DialogDescription>
-              </DialogHeader>
-              <Button type="button" size="lg" className="w-full" onClick={() => onOpenChange(false)}>
-                完成
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="lg"
-                className="mt-2 w-full"
-                onClick={() => navigate(classroomId ? `/b/${created.id}?room=${classroomId}` : `/b/${created.id}`)}
-              >
-                打開壁報
-              </Button>
-            </>
-          )
+          <>
+            <ShareBody
+              board={created}
+              password={password || undefined}
+              title="分享連結"
+              description="學生打開呢條連結就可以入呢塊板。掃碼入板同掃碼交作品係另外兩個按鈕。"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="mt-3 w-full"
+              onClick={() => navigate(classroomId ? `/b/${created.id}?room=${classroomId}` : `/b/${created.id}`)}
+            >
+              {created.type === 'sandbox' ? '打開作品集' : '打開壁報'}
+            </Button>
+          </>
         ) : (
           <>
             <DialogHeader>
@@ -426,8 +389,13 @@ export function ShareDialog({
   if (!board) return null
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <ShareBody board={board} password={password} title="分享俾學生" description="" />
+      <DialogContent className="max-w-xl">
+        <ShareBody
+          board={board}
+          password={password}
+          title="分享連結"
+          description="學生打開呢條連結就可以入呢塊板。掃碼入板同掃碼交作品係另外兩個按鈕。"
+        />
       </DialogContent>
     </Dialog>
   )
@@ -446,9 +414,20 @@ function ShareBody({
   description: string
   extra?: ReactNode
 }) {
-  const url = boardUrl(board.id)
-  const message = shareMessage(board, password)
+  const [url, setUrl] = useState(() => boardUrl(board.id))
+  const message = shareMessage(board, password, url)
   const [copied, setCopied] = useState<'link' | 'password' | 'all' | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setUrl(boardUrl(board.id))
+    void loadPublicOrigin().then((origin) => {
+      if (!cancelled) setUrl(boardUrl(board.id, origin))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [board.id])
 
   function flash(kind: 'link' | 'password' | 'all') {
     setCopied(kind)
@@ -459,16 +438,9 @@ function ShareBody({
     <>
       <DialogHeader>
         <DialogTitle>{title}</DialogTitle>
-        {description ? (
-          <DialogDescription>{description}</DialogDescription>
-        ) : (
-          <DialogDescription className="sr-only">投影呢個畫面，叫學生掃／開連結。</DialogDescription>
-        )}
+        <DialogDescription>{description || '複製學生連結。'}</DialogDescription>
       </DialogHeader>
-      <p className="mb-3 text-lg font-semibold">投影呢個畫面，叫學生掃／開連結。</p>
-      {board.type === 'sandbox' && <p className="mb-3 text-lg">學生開呢條連結，揀版面，小組一齊貼成果。</p>}
       <div className="space-y-3">
-        <p className="text-base font-semibold">① 學生連結</p>
         <p className="break-all rounded-2xl bg-cream px-4 py-4 text-lg font-semibold text-sky">{url}</p>
         <Button
           type="button"
@@ -480,12 +452,11 @@ function ShareBody({
             })
           }}
         >
-          {copied === 'link' ? <Check className="h-5 w-5" /> : <Copy className="h-5 w-5" />}
           {copied === 'link' ? '已複製' : '複製連結'}
         </Button>
         {password ? (
           <>
-            <p className="text-base font-semibold">② 學生密碼</p>
+            <p className="text-base font-semibold">學生密碼</p>
             <p className="rounded-2xl border border-line px-4 py-4 text-center text-3xl font-bold tracking-wide">{password}</p>
             <Button
               type="button"

@@ -2,13 +2,16 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
-import type { Board, BoardSummary, BoardType, CanvasItem, ItemKind, Post, PostKind, SandboxPage, WallLayout, Workspace } from '../shared/types'
+import { DROP_TTL_MS } from '../shared/dropTtl'
+import type { Board, BoardSummary, BoardType, CanvasItem, DropFile, ItemKind, Post, PostKind, SandboxPage, WallLayout, Workspace } from '../shared/types'
 import { makeId } from '../shared/text'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const dataDir = path.resolve(process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(root, 'data'))
 export const uploadDir = path.join(dataDir, 'uploads')
+export const dropDir = path.join(dataDir, 'drops')
 fs.mkdirSync(uploadDir, { recursive: true })
+fs.mkdirSync(dropDir, { recursive: true })
 
 const db = new DatabaseSync(path.join(dataDir, 'classroom.db'))
 db.exec('PRAGMA journal_mode = WAL')
@@ -84,6 +87,25 @@ const boardColumns = db.prepare('PRAGMA table_info(boards)').all() as { name: st
 if (!boardColumns.some((column) => column.name === 'allow_student_pages')) {
   db.exec('ALTER TABLE boards ADD COLUMN allow_student_pages INTEGER NOT NULL DEFAULT 0')
 }
+if (!boardColumns.some((column) => column.name === 'drop_token')) {
+  db.exec('ALTER TABLE boards ADD COLUMN drop_token TEXT')
+}
+if (!boardColumns.some((column) => column.name === 'drops_paused')) {
+  db.exec('ALTER TABLE boards ADD COLUMN drops_paused INTEGER NOT NULL DEFAULT 0')
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_boards_drop_token ON boards(drop_token)')
+db.exec(`
+  CREATE TABLE IF NOT EXISTS drop_files (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    original_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_drops_board ON drop_files(board_id);
+`)
 db.exec(`
   CREATE TABLE IF NOT EXISTS sandbox_pages (
     id TEXT PRIMARY KEY,
@@ -109,6 +131,8 @@ type BoardRow = {
   locked: number | bigint
   allow_student_pages?: number | bigint
   layout: string
+  drop_token?: string | null
+  drops_paused?: number | bigint
   created_at: number | bigint
   updated_at: number | bigint
   activity_count?: number | bigint
@@ -324,6 +348,17 @@ export function updateBoard(
 }
 
 export function deleteBoard(id: string) {
+  for (const file of listDropRows(id)) {
+    const stored = dropFilePath(file.stored_name)
+    if (stored) {
+      try {
+        fs.unlinkSync(stored)
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+  db.prepare('DELETE FROM drop_files WHERE board_id = ?').run(id)
   db.prepare('DELETE FROM posts WHERE board_id = ?').run(id)
   db.prepare('DELETE FROM canvas_items WHERE board_id = ?').run(id)
   db.prepare('DELETE FROM sandbox_pages WHERE board_id = ?').run(id)
@@ -561,4 +596,118 @@ export function saveItem(item: CanvasItem) {
 export function removeItem(boardId: string, itemId: string) {
   db.prepare('DELETE FROM canvas_items WHERE board_id = ? AND id = ?').run(boardId, itemId)
   touchBoard(boardId)
+}
+
+const STORED_NAME = /^[a-f0-9]{24}\.(jpg|png|gif|webp|pdf)$/
+
+type DropRow = {
+  id: string
+  board_id: string
+  author_name: string
+  stored_name: string
+  original_name: string
+  kind: string
+  created_at: number | bigint
+}
+
+function listDropRows(boardId: string) {
+  return many<DropRow>('SELECT * FROM drop_files WHERE board_id = ? ORDER BY created_at DESC', boardId)
+}
+
+function mapDrop(row: DropRow): DropFile {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    authorName: row.author_name,
+    originalName: row.original_name,
+    kind: row.kind === 'pdf' ? 'pdf' : 'image',
+    createdAt: num(row.created_at),
+  }
+}
+
+export function dropFilePath(storedName: string) {
+  if (!STORED_NAME.test(storedName)) return null
+  return path.join(dropDir, storedName)
+}
+
+export function ensureDropToken(boardId: string) {
+  const current = getBoardRow(boardId)
+  if (!current) return undefined
+  if (current.drop_token) return current.drop_token
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const token = makeId(20)
+    try {
+      db.prepare(`UPDATE boards SET drop_token = ? WHERE id = ? AND (drop_token IS NULL OR drop_token = '')`).run(token, boardId)
+    } catch (error) {
+      if (!String(error).includes('UNIQUE')) throw error
+      continue
+    }
+    const next = getBoardRow(boardId)
+    if (next?.drop_token) return next.drop_token
+  }
+  return getBoardRow(boardId)?.drop_token
+}
+
+export function getBoardByDropToken(token: string) {
+  if (!/^[a-zA-Z0-9]{16,32}$/.test(token)) return undefined
+  return one<BoardRow>('SELECT * FROM boards WHERE drop_token = ?', token)
+}
+
+export function dropsPaused(row: BoardRow) {
+  return num(row.drops_paused) === 1
+}
+
+export function setDropsPaused(boardId: string, paused: boolean) {
+  db.prepare('UPDATE boards SET drops_paused = ?, updated_at = ? WHERE id = ?').run(paused ? 1 : 0, Date.now(), boardId)
+}
+
+export function listDropFiles(boardId: string) {
+  return listDropRows(boardId).map(mapDrop)
+}
+
+export function getDropFile(boardId: string, fileId: string) {
+  const row = one<DropRow>('SELECT * FROM drop_files WHERE board_id = ? AND id = ?', boardId, fileId)
+  return row ? { file: mapDrop(row), storedName: row.stored_name } : undefined
+}
+
+export function insertDropFile(input: { boardId: string; authorName: string; storedName: string; originalName: string; kind: 'image' | 'pdf' }) {
+  const id = makeId(12)
+  const now = Date.now()
+  db.prepare(
+    `INSERT INTO drop_files (id, board_id, author_name, stored_name, original_name, kind, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(id, input.boardId, input.authorName, input.storedName, input.originalName, input.kind, now)
+  const saved = getDropFile(input.boardId, id)
+  return saved!.file
+}
+
+export function purgeExpiredDrops(now = Date.now()) {
+  const cutoff = now - DROP_TTL_MS
+  const rows = many<DropRow>('SELECT * FROM drop_files WHERE created_at <= ?', cutoff)
+  for (const row of rows) {
+    const stored = dropFilePath(row.stored_name)
+    if (!stored) continue
+    try {
+      fs.unlinkSync(stored)
+    } catch {
+      /* already gone */
+    }
+  }
+  if (rows.length > 0) db.prepare('DELETE FROM drop_files WHERE created_at <= ?').run(cutoff)
+  return rows.length
+}
+
+export function removeDropFile(boardId: string, fileId: string) {
+  const current = getDropFile(boardId, fileId)
+  if (!current) return undefined
+  const stored = dropFilePath(current.storedName)
+  if (stored) {
+    try {
+      fs.unlinkSync(stored)
+    } catch {
+      /* already gone */
+    }
+  }
+  db.prepare('DELETE FROM drop_files WHERE board_id = ? AND id = ?').run(boardId, fileId)
+  return current.file
 }

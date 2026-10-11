@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { Logo } from '@/components/Logo'
 import { BoardPage } from '@/pages/BoardPage'
 import { ClassroomPage } from '@/pages/ClassroomPage'
+import { DropPage } from '@/pages/DropPage'
 import { HomePage } from '@/pages/HomePage'
 
 export default function App() {
@@ -13,6 +14,7 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/c/:workspaceId" element={<ClassroomPage />} />
           <Route path="/b/:boardId" element={<BoardPage />} />
+          <Route path="/u/:token" element={<DropPage />} />
           <Route
             path="*"
             element={

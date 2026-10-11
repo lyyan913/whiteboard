@@ -112,8 +112,32 @@ export interface Person {
   name: string
 }
 
+export interface DropFile {
+  id: string
+  boardId: string
+  authorName: string
+  originalName: string
+  kind: 'image' | 'pdf'
+  createdAt: number
+}
+
+export interface DropFolder {
+  token: string
+  paused: boolean
+  files: DropFile[]
+}
+
+export interface DropPageInfo {
+  title: string
+  hasPassword: boolean
+  paused: boolean
+}
+
 export type ServerMessage =
   | { type: 'presence'; people: Person[] }
+  | { type: 'drop.created'; file: DropFile }
+  | { type: 'drop.deleted'; id: string }
+  | { type: 'drop.paused'; paused: boolean }
   | { type: 'post.created'; post: Post }
   | { type: 'post.updated'; post: Post }
   | { type: 'post.deleted'; id: string }
