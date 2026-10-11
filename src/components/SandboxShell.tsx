@@ -28,6 +28,7 @@ export function SandboxShell({
   onLocal,
   onUpdate,
   onDelete,
+  onRemove,
   onLive,
   onInteract,
   onError,
@@ -48,6 +49,7 @@ export function SandboxShell({
   onLocal: (id: string, patch: Partial<CanvasItem>) => void
   onUpdate: (id: string, patch: Partial<CanvasItem>) => Promise<void> | void
   onDelete: (id: string) => Promise<void> | void
+  onRemove: (id: string) => Promise<boolean>
   onLive: (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void
   onInteract: (id: string, active: boolean) => void
   onError: (message: string) => void
@@ -144,7 +146,7 @@ export function SandboxShell({
             </h2>
             {canManage(active) && (
               <PopoverMenu icon label="版面選項">
-                <MenuItem onClick={() => openRename(active)}>改名</MenuItem>
+                <MenuItem onClick={() => openRename(active)}>更改名稱</MenuItem>
                 <MenuItem onClick={() => onDeletePage(active.id)}>刪除版面</MenuItem>
               </PopoverMenu>
             )}
@@ -152,7 +154,7 @@ export function SandboxShell({
         )}
         {hint && active && (
           <div className="pointer-events-none absolute left-1/2 top-16 z-30 -translate-x-1/2 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow">
-            呢版大家可以一齊改
+            這一版大家可以一起修改
           </div>
         )}
         {active ? (
@@ -167,6 +169,7 @@ export function SandboxShell({
             onLocal={onLocal}
             onUpdate={onUpdate}
             onDelete={onDelete}
+            onRemove={onRemove}
             onLive={onLive}
             onInteract={onInteract}
             onError={onError}
@@ -174,16 +177,16 @@ export function SandboxShell({
         ) : (
           <div className="grid flex-1 place-items-center bg-cream px-6 text-center">
             <div className="max-w-md">
-              <p className="font-serif text-3xl font-bold">{canAdd ? '未有版面' : '老師未開版面'}</p>
+              <p className="font-serif text-3xl font-bold">{canAdd ? '尚未有版面' : '老師尚未開啟版面'}</p>
               <ol className="mt-4 space-y-2 text-left text-lg text-muted">
                 {canAdd ? (
                   <>
-                    <li>① 撳「＋ 卡片」</li>
-                    <li>② 改名，例如「第1組」</li>
-                    <li>③ 喺白色版面貼上基本資料</li>
+                    <li>① 按「＋ 卡片」</li>
+                    <li>② 更改名稱，例如「第1組」</li>
+                    <li>③ 在白色版面貼上基本資料</li>
                   </>
                 ) : (
-                  <li>等老師開好版面，就可以一齊貼成果。</li>
+                  <li>等老師開啟版面後，就可以一起貼上成果。</li>
                 )}
               </ol>
               {canAdd && (
@@ -210,7 +213,7 @@ export function SandboxShell({
       <Dialog open={Boolean(rename)} onOpenChange={(open) => { if (!open) setRename(null) }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>版面叫咩名？</DialogTitle>
+            <DialogTitle>版面叫什麼名字？</DialogTitle>
             <DialogDescription>例如「第1組」或者「範例·狐狸」。</DialogDescription>
           </DialogHeader>
           <form
@@ -240,12 +243,12 @@ export function SandboxShell({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{menuPage?.title}</DialogTitle>
-            <DialogDescription>改名或者刪除呢個版面。</DialogDescription>
+            <DialogDescription>更改名稱或刪除這個版面。</DialogDescription>
           </DialogHeader>
           {menuPage && canManage(menuPage) && (
             <div className="grid gap-2">
               <Button type="button" size="lg" variant="outline" onClick={() => openRename(menuPage)}>
-                改名
+                更改名稱
               </Button>
               <Button
                 type="button"

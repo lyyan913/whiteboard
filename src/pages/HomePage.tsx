@@ -86,7 +86,7 @@ export function HomePage() {
       navigate(`/b/${board[1]}`)
       return
     }
-    setLinkError('請貼上老師分享嘅課室連結')
+    setLinkError('請貼上老師分享的課室連結')
   }
 
   if (booting) {
@@ -118,7 +118,7 @@ export function HomePage() {
               className="flex min-h-64 flex-col rounded-2xl border border-line bg-paper p-6 text-left shadow-sm"
             >
               <span className="grid h-12 w-12 place-items-center rounded-full bg-stamp text-xl font-bold text-white">①</span>
-              <span className="mt-4 font-serif text-3xl font-bold">我係老師</span>
+              <span className="mt-4 font-serif text-3xl font-bold">我是老師</span>
               <span className="mt-2 text-lg text-muted">建立／管理課室</span>
               <span className="mt-auto inline-flex h-14 items-center justify-center rounded-2xl bg-stamp text-base font-semibold text-white">開始</span>
             </button>
@@ -131,8 +131,8 @@ export function HomePage() {
               className="flex min-h-64 flex-col rounded-2xl border border-line bg-paper p-6 text-left shadow-sm"
             >
               <span className="grid h-12 w-12 place-items-center rounded-full bg-sky text-xl font-bold text-white">②</span>
-              <span className="mt-4 font-serif text-3xl font-bold">我係學生</span>
-              <span className="mt-2 text-lg text-muted">用連結入壁報</span>
+              <span className="mt-4 font-serif text-3xl font-bold">我是學生</span>
+              <span className="mt-2 text-lg text-muted">用連結進入壁報</span>
               <span className="mt-auto inline-flex h-14 items-center justify-center rounded-2xl border border-line text-base font-semibold text-ink">我有連結</span>
             </button>
           </div>
@@ -162,7 +162,7 @@ export function HomePage() {
                   maxLength={32}
                   onChange={(event) => setPin(event.target.value)}
                 />
-                <p className="text-base text-muted">密碼請自己記住，唔好同學生講老師密碼。</p>
+                <p className="text-base text-muted">密碼請自己記住，不要告訴學生老師密碼。</p>
               </div>
               {formError && (
                 <p role="alert" className="rounded-2xl bg-red-50 px-3 py-3 text-base text-danger">
@@ -180,14 +180,14 @@ export function HomePage() {
         )}
         {audience === 'student' && (
           <form onSubmit={openStudentLink} className="mt-8 max-w-xl rounded-2xl border border-line bg-paper p-6 shadow-sm">
-            <h2 className="font-serif text-3xl font-bold">我係學生</h2>
-            <p className="mt-2 text-lg text-muted">請用老師分享嘅課室連結。入面可以看到所有人的作品。</p>
+            <h2 className="font-serif text-3xl font-bold">我是學生</h2>
+            <p className="mt-2 text-lg text-muted">請使用老師分享的課室連結。裡面可以看到所有人的作品。</p>
             <div className="mt-5 space-y-2">
               <Label htmlFor="student-link">貼上連結</Label>
               <Input
                 id="student-link"
                 value={studentLink}
-                placeholder="貼上老師俾你嘅連結"
+                placeholder="貼上老師給你的連結"
                 onChange={(event) => setStudentLink(event.target.value)}
               />
             </div>

@@ -1,19 +1,22 @@
 import { ArrowUpRight, Circle, Heart, Image as ImageIcon, MousePointer2, Pencil, Scan, Square, Star, StickyNote, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
-import { NOTE_COLOR_LABELS, NOTE_COLORS, TEXT_COLOR_LABELS, TEXT_COLORS } from '../../shared/colors'
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { isFontSize, NOTE_COLOR_LABELS, NOTE_COLORS, TEXT_COLOR_LABELS, TEXT_COLORS } from '../../shared/colors'
+import { containBox, resizeBox, type Corner } from '../../shared/geometry'
 import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk } from '../../shared/markup'
 import { isAllowedImageUrl } from '../../shared/media'
 import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
 import { makeId } from '../../shared/text'
 import { Markup } from '@/components/Markup'
 import { RichNote } from '@/components/RichNote'
+import { loadImageSize } from '@/lib/fitImage'
+import { useEditHistory } from '@/lib/history'
 import { useAppearIds } from '@/lib/useAppearIds'
 import { cn, polaroidTilt } from '@/lib/utils'
 
 type Tool = 'select' | ItemKind
 
 const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2; tone: string }[] = [
-  { id: 'select', label: '揀', icon: MousePointer2, tone: '#1f1a14' },
+  { id: 'select', label: '選擇', icon: MousePointer2, tone: '#1f1a14' },
   { id: 'pen', label: '畫筆', icon: Pencil, tone: '#c4492c' },
   { id: 'text', label: '文字', icon: Type, tone: '#1d4e89' },
   { id: 'sticky', label: '便利貼', icon: StickyNote, tone: '#c99a06' },
@@ -21,20 +24,36 @@ const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2; tone: string
   { id: 'ellipse', label: '圓形', icon: Circle, tone: '#e07b24' },
   { id: 'star', label: '星', icon: Star, tone: '#d6457a' },
   { id: 'heart', label: '心', icon: Heart, tone: '#d6457a' },
-  { id: 'arrow', label: '箭咀', icon: ArrowUpRight, tone: '#6b4c9a' },
+  { id: 'arrow', label: '箭頭', icon: ArrowUpRight, tone: '#6b4c9a' },
 ]
 
 const SOFT_SHADOW = '0 4px 12px rgba(60,40,20,.12)'
+const CORNERS: Corner[] = ['nw', 'ne', 'sw', 'se']
 
 function defaultSize(kind: ItemKind) {
-  if (kind === 'text') return { w: 240, h: 88 }
-  if (kind === 'sticky') return { w: 220, h: 170 }
-  if (kind === 'image') return { w: 320, h: 240 }
-  return { w: 180, h: 140 }
+  if (kind === 'text') return { w: 420, h: 160 }
+  if (kind === 'sticky') return { w: 380, h: 300 }
+  if (kind === 'image') return { w: 640, h: 480 }
+  return { w: 320, h: 240 }
 }
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
+}
+
+function readingSize(item: CanvasItem) {
+  if (item.kind === 'text' || item.kind === 'sticky') return isFontSize(item.fontSize) ? item.fontSize : 32
+  return 32
+}
+
+function nearlySame(before: Partial<CanvasItem>, after: Partial<CanvasItem>) {
+  const keys = Object.keys(after) as (keyof CanvasItem)[]
+  return keys.every((key) => {
+    const left = before[key]
+    const right = after[key]
+    if (typeof left === 'number' && typeof right === 'number') return Math.abs(left - right) < 0.5
+    return left === right
+  })
 }
 
 export function CanvasView({
@@ -47,6 +66,8 @@ export function CanvasView({
   onLocal,
   onUpdate,
   onDelete,
+  onRemove,
+  onViewFrame,
   onLive,
   onInteract,
 }: {
@@ -59,6 +80,8 @@ export function CanvasView({
   onLocal: (id: string, patch: Partial<CanvasItem>) => void
   onUpdate: (id: string, patch: Partial<CanvasItem>) => Promise<void> | void
   onDelete: (id: string) => Promise<void> | void
+  onRemove: (id: string) => Promise<boolean>
+  onViewFrame?: (frame: { x: number; y: number; w: number; h: number }) => void
   onLive: (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void
   onInteract: (id: string, active: boolean) => void
 }) {
@@ -69,16 +92,32 @@ export function CanvasView({
   const camera = useRef({ x: 72, y: 56, zoom: 1 })
   const lastLive = useRef(0)
   const itemsRef = useRef(items)
+  const fitted = useRef(new Set<string>())
+  const onViewFrameRef = useRef(onViewFrame)
   itemsRef.current = items
+  onViewFrameRef.current = onViewFrame
   const [tool, setTool] = useState<Tool>('sticky')
   const [color, setColor] = useState<string>(NOTE_COLORS[0])
   const [selected, setSelected] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draftText, setDraftText] = useState('')
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [ink, setInk] = useState<{ x: number; y: number }[] | null>(null)
   const [hint, setHint] = useState(false)
   const canEdit = !locked || role === 'teacher'
   const appear = useAppearIds(items.map((item) => item.id).join('\u0001'))
+  const drawing = tool === 'pen' || tool === 'arrow'
+  const history = useEditHistory({ onCreate, onUpdate, onLocal, onRemove })
+
+  function rememberCreate(item: CanvasItem | null) {
+    if (item) history.note({ type: 'create', item })
+    return item
+  }
+
+  function rememberPatch(id: string, before: Partial<CanvasItem>, after: Partial<CanvasItem>) {
+    if (nearlySame(before, after)) return
+    history.note({ type: 'patch', id, before, after })
+  }
 
   useEffect(() => {
     let seen = false
@@ -96,16 +135,30 @@ export function CanvasView({
   const colors = tool === 'text' ? TEXT_COLORS : NOTE_COLORS
   const colorLabels = tool === 'text' ? TEXT_COLOR_LABELS : NOTE_COLOR_LABELS
 
+  function visibleFrame() {
+    const rect = viewportRef.current?.getBoundingClientRect()
+    const current = camera.current
+    if (!rect || rect.width < 1 || rect.height < 1) return { x: 0, y: 0, w: 1400, h: 900 }
+    return {
+      x: -current.x / current.zoom,
+      y: -current.y / current.zoom,
+      w: rect.width / current.zoom,
+      h: rect.height / current.zoom,
+    }
+  }
+
   function apply() {
     const current = camera.current
     if (worldRef.current) {
       worldRef.current.style.transform = `translate(${current.x}px, ${current.y}px) scale(${current.zoom})`
+      worldRef.current.style.setProperty('--board-zoom', String(current.zoom))
     }
     if (dotsRef.current) {
       dotsRef.current.style.backgroundPosition = `${current.x}px ${current.y}px`
       dotsRef.current.style.backgroundSize = `${24 * current.zoom}px ${24 * current.zoom}px`
     }
     if (zoomRef.current) zoomRef.current.textContent = `${Math.round(current.zoom * 100)}%`
+    onViewFrameRef.current?.(visibleFrame())
   }
 
   useLayoutEffect(() => {
@@ -158,6 +211,17 @@ export function CanvasView({
       if (event.isComposing) return
       const target = event.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+      if ((event.metaKey || event.ctrlKey) && (event.key === 'z' || event.key === 'Z')) {
+        event.preventDefault()
+        if (event.shiftKey) void history.redo()
+        else void history.undo()
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && (event.key === 'y' || event.key === 'Y')) {
+        event.preventDefault()
+        void history.redo()
+        return
+      }
       if ((event.key === 'Delete' || event.key === 'Backspace') && selected) {
         const item = itemsRef.current.find((entry) => entry.id === selected)
         if (!item || !canDelete(item)) return
@@ -173,7 +237,7 @@ export function CanvasView({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, onDelete, role, locked, clientId])
+  }, [selected, onDelete, role, locked, clientId, history.undo, history.redo])
 
   function canDelete(item: CanvasItem) {
     if (locked && role !== 'teacher') return false
@@ -219,7 +283,14 @@ export function CanvasView({
     apply()
   }
 
-  function onBackgroundDown(event: React.PointerEvent<HTMLDivElement>) {
+  function chooseTool(next: Tool) {
+    setTool(next)
+    if (next === 'pen' || next === 'arrow') setSelected(null)
+    if (next === 'text') setColor(TEXT_COLORS[0])
+    else if (tool === 'text') setColor(NOTE_COLORS[0])
+  }
+
+  function onBackgroundDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0 && event.button !== 1) return
     if ((event.target as HTMLElement).closest('[data-node], [data-toolbar]')) return
     const startX = event.clientX
@@ -229,12 +300,14 @@ export function CanvasView({
     const mode = event.button === 1 || tool === 'select' || tool === 'image' || !canEdit ? 'pan' : tool === 'pen' || tool === 'arrow' ? 'ink' : 'create'
     let moved = false
     const inkPoints = [world]
+    if (mode === 'ink') setInk(inkPoints.slice())
     const move = (pointer: PointerEvent) => {
       moved = Math.hypot(pointer.clientX - startX, pointer.clientY - startY) > 5
       if (mode === 'ink') {
         const point = screenToWorld(pointer.clientX, pointer.clientY)
         const last = inkPoints[inkPoints.length - 1]
         if (Math.hypot(point.x - last.x, point.y - last.y) >= 2) inkPoints.push(point)
+        setInk(inkPoints.slice())
         return
       }
       if (mode === 'pan') {
@@ -259,6 +332,7 @@ export function CanvasView({
         return
       }
       if (mode === 'ink') {
+        setInk(null)
         const kind = tool === 'arrow' ? 'arrow' : 'pen'
         if (kind === 'arrow' && inkPoints.length < 2) return
         const frame = inkFrame(simplifyInk(inkPoints), 16)
@@ -272,9 +346,7 @@ export function CanvasView({
           color,
           text: encodeInk('solid', frame.relative),
           fontSize: 8,
-        }).then((created) => {
-          if (created) setSelected(created.id)
-        })
+        }).then((created) => rememberCreate(created))
         return
       }
       setDraft(null)
@@ -283,7 +355,7 @@ export function CanvasView({
       const size = defaultSize(kind)
       const wide = Math.abs(point.x - world.x) > 24 && Math.abs(point.y - world.y) > 24
       const rect = wide
-        ? { x: Math.min(world.x, point.x), y: Math.min(world.y, point.y), w: Math.max(48, Math.abs(point.x - world.x)), h: Math.max(36, Math.abs(point.y - world.y)) }
+        ? { x: Math.min(world.x, point.x), y: Math.min(world.y, point.y), w: Math.max(64, Math.abs(point.x - world.x)), h: Math.max(48, Math.abs(point.y - world.y)) }
         : { x: world.x - size.w / 2, y: world.y - size.h / 2, w: size.w, h: size.h }
       void onCreate({
         id: makeId(12),
@@ -291,67 +363,132 @@ export function CanvasView({
         ...rect,
         color,
         text: isShapeKind(kind) ? 'both' : '',
-        fontSize: isShapeKind(kind) ? 8 : 28,
+        fontSize: isShapeKind(kind) ? 8 : 32,
       }).then((created) => {
-        if (!created) return
-        setSelected(created.id)
-        if (created.kind === 'sticky' || created.kind === 'text') setEditing(created.id)
+        const saved = rememberCreate(created)
+        if (!saved) return
+        setSelected(saved.id)
+        if (saved.kind === 'sticky' || saved.kind === 'text') setEditing(saved.id)
       })
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
 
-  function onNodeDown(event: React.PointerEvent<HTMLDivElement>, item: CanvasItem) {
+  function onNodeDown(event: ReactPointerEvent, item: CanvasItem) {
     event.stopPropagation()
+    if (drawing) return
     setSelected(item.id)
     if (!canEdit || tool !== 'select') return
-    if ((event.target as HTMLElement).closest('[data-resize], textarea, button')) return
+    const target = event.target
+    if (target instanceof Element && target.closest('[data-resize], textarea, button')) return
+    const before = { x: item.x, y: item.y, w: item.w, h: item.h, z: item.z }
     const maxZ = Math.max(1, ...itemsRef.current.map((entry) => entry.z)) + 1
-    let x = item.x
-    let y = item.y
+    const pointerId = event.pointerId
+    const pointers = new Map<number, { x: number; y: number }>()
+    pointers.set(pointerId, { x: event.clientX, y: event.clientY })
+    const origin = { x: item.x, y: item.y, w: item.w, h: item.h }
+    let placed = { x: item.x, y: item.y, w: item.w, h: item.h }
+    let mode: 'drag' | 'pinch' = 'drag'
+    let pinchDist = 1
+    const dragStart = { x: event.clientX, y: event.clientY }
     onInteract(item.id, true)
     onLocal(item.id, { z: maxZ })
-    const startX = event.clientX
-    const startY = event.clientY
     const move = (pointer: PointerEvent) => {
-      x = item.x + (pointer.clientX - startX) / camera.current.zoom
-      y = item.y + (pointer.clientY - startY) / camera.current.zoom
-      onLocal(item.id, { x, y, z: maxZ })
-      emitLive(item.id, { x, y })
+      if (pointers.has(pointer.pointerId)) pointers.set(pointer.pointerId, { x: pointer.clientX, y: pointer.clientY })
+      if (mode === 'pinch' && pointers.size >= 2) {
+        const [a, b] = [...pointers.values()]
+        const dist = Math.max(8, Math.hypot(a.x - b.x, a.y - b.y))
+        const scale = dist / pinchDist
+        const w = origin.w * scale
+        const h = origin.h * scale
+        placed = resizeBox({ ...origin }, 'se', w - origin.w, h - origin.h, true)
+        placed = { x: origin.x + origin.w / 2 - placed.w / 2, y: origin.y + origin.h / 2 - placed.h / 2, w: placed.w, h: placed.h }
+        onLocal(item.id, { ...placed, z: maxZ })
+        emitLive(item.id, placed)
+        return
+      }
+      if (pointer.pointerId !== pointerId) return
+      placed = {
+        x: origin.x + (pointer.clientX - dragStart.x) / camera.current.zoom,
+        y: origin.y + (pointer.clientY - dragStart.y) / camera.current.zoom,
+        w: origin.w,
+        h: origin.h,
+      }
+      onLocal(item.id, { x: placed.x, y: placed.y, z: maxZ })
+      emitLive(item.id, { x: placed.x, y: placed.y })
+    }
+    const extraDown = (pointer: PointerEvent) => {
+      pointers.set(pointer.pointerId, { x: pointer.clientX, y: pointer.clientY })
+      if (item.kind === 'image' && pointers.size >= 2 && mode === 'drag') {
+        mode = 'pinch'
+        const [a, b] = [...pointers.values()]
+        pinchDist = Math.max(12, Math.hypot(a.x - b.x, a.y - b.y))
+        origin.x = placed.x
+        origin.y = placed.y
+        origin.w = placed.w
+        origin.h = placed.h
+      }
+    }
+    const up = (pointer: PointerEvent) => {
+      pointers.delete(pointer.pointerId)
+      if (pointers.size > 0) return
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      window.removeEventListener('pointerdown', extraDown)
+      emitLive(item.id, placed, true)
+      const after = { ...placed, z: maxZ }
+      void Promise.resolve(onUpdate(item.id, after)).finally(() => onInteract(item.id, false))
+      rememberPatch(item.id, before, after)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    window.addEventListener('pointerdown', extraDown)
+  }
+
+  function onResizeDown(event: ReactPointerEvent<HTMLButtonElement>, item: CanvasItem, corner: Corner) {
+    event.stopPropagation()
+    event.preventDefault()
+    if (!canEdit) return
+    const before = { x: item.x, y: item.y, w: item.w, h: item.h }
+    const origin = { x: item.x, y: item.y, w: item.w, h: item.h }
+    const start = screenToWorld(event.clientX, event.clientY)
+    let placed = origin
+    onInteract(item.id, true)
+    const move = (pointer: PointerEvent) => {
+      const point = screenToWorld(pointer.clientX, pointer.clientY)
+      placed = resizeBox(origin, corner, point.x - start.x, point.y - start.y, item.kind === 'image')
+      onLocal(item.id, placed)
+      emitLive(item.id, placed)
     }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      emitLive(item.id, { x, y }, true)
-      void Promise.resolve(onUpdate(item.id, { x, y, z: maxZ })).finally(() => onInteract(item.id, false))
+      emitLive(item.id, placed, true)
+      void Promise.resolve(onUpdate(item.id, placed)).finally(() => onInteract(item.id, false))
+      rememberPatch(item.id, before, placed)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
 
-  function onResizeDown(event: React.PointerEvent<HTMLButtonElement>, item: CanvasItem) {
-    event.stopPropagation()
-    if (!canEdit) return
-    let w = item.w
-    let h = item.h
-    onInteract(item.id, true)
-    const startX = event.clientX
-    const startY = event.clientY
-    const move = (pointer: PointerEvent) => {
-      w = Math.max(48, item.w + (pointer.clientX - startX) / camera.current.zoom)
-      h = Math.max(36, item.h + (pointer.clientY - startY) / camera.current.zoom)
-      onLocal(item.id, { w, h })
-      emitLive(item.id, { w, h })
+  function maybeFitImage(item: CanvasItem, naturalW: number, naturalH: number) {
+    if (fitted.current.has(item.id) || naturalW < 1 || naturalH < 1) return
+    fitted.current.add(item.id)
+    if (Date.now() - item.createdAt > 30_000) return
+    const frame = visibleFrame()
+    const target = containBox(frame.w * 0.9, frame.h * 0.9, naturalW, naturalH)
+    if (item.w >= target.w * 0.75 && item.h >= target.h * 0.75) return
+    const next = {
+      x: frame.x + (frame.w - target.w) / 2,
+      y: frame.y + (frame.h - target.h) / 2,
+      w: target.w,
+      h: target.h,
     }
-    const up = () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-      emitLive(item.id, { w, h }, true)
-      void Promise.resolve(onUpdate(item.id, { w, h })).finally(() => onInteract(item.id, false))
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
+    onLocal(item.id, next)
+    void onUpdate(item.id, next)
   }
 
   async function onPhoto(event: ChangeEvent<HTMLInputElement>) {
@@ -360,23 +497,31 @@ export function CanvasView({
     if (!file || !onUpload || !canEdit) return
     const url = await onUpload(file)
     if (!url) return
-    const rect = viewportRef.current?.getBoundingClientRect()
-    const center = rect ? screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2) : { x: 200, y: 160 }
+    const frame = visibleFrame()
+    const natural = await loadImageSize(file)
+    const size = natural ? containBox(frame.w * 0.9, frame.h * 0.9, natural.width, natural.height) : containBox(frame.w * 0.9, frame.h * 0.9, 4, 3)
     const created = await onCreate({
       id: makeId(12),
       kind: 'image',
-      x: center.x - 160,
-      y: center.y - 120,
-      w: 320,
-      h: 240,
+      x: frame.x + (frame.w - size.w) / 2,
+      y: frame.y + (frame.h - size.h) / 2,
+      w: size.w,
+      h: size.h,
       color: NOTE_COLORS[5],
       text: url,
-      fontSize: 28,
+      fontSize: 32,
     })
-    if (created) setSelected(created.id)
+    const saved = rememberCreate(created)
+    if (saved) {
+      fitted.current.add(saved.id)
+      setSelected(saved.id)
+      setTool('select')
+    }
   }
 
   const ordered = [...items].sort((a, b) => a.z - b.z || a.createdAt - b.createdAt)
+  const liveInk = ink && ink.length > 1 ? ink : null
+  const liveFrame = liveInk ? inkFrame(liveInk, 8) : null
 
   return (
     <div className="relative min-h-0 flex-1 bg-cream">
@@ -392,18 +537,16 @@ export function CanvasView({
             const active = selected === item.id
             const isText = item.kind === 'text'
             const isImage = item.kind === 'image'
-            const graphic = item.kind === 'pen' || item.kind === 'arrow' || isShapeKind(item.kind)
-            const caption = graphic && !isFillMode(item.text) && item.kind !== 'pen' && item.kind !== 'arrow' ? item.text : ''
+            const inkItem = item.kind === 'pen' || item.kind === 'arrow'
+            const graphic = inkItem || isShapeKind(item.kind)
+            const caption = graphic && !isFillMode(item.text) && !inkItem ? item.text : ''
             const shape = isShapeKind(item.kind)
+            const fontSize = readingSize(item)
             return (
               <div
                 key={item.id}
                 data-node
-                className={cn(
-                  'absolute touch-none',
-                  active && 'outline-2 outline-dashed outline-offset-4 outline-leaf',
-                  appear.has(item.id) && 'item-pop',
-                )}
+                className={cn('absolute touch-none', active && !inkItem && 'outline-2 outline-dashed outline-offset-4 outline-leaf', appear.has(item.id) && 'item-pop')}
                 style={{
                   left: item.x,
                   top: item.y,
@@ -416,21 +559,37 @@ export function CanvasView({
                   border: !graphic && item.kind === 'rect' ? '2px solid #2a2118' : undefined,
                   boxShadow: isImage || graphic ? 'none' : SOFT_SHADOW,
                   filter: shape ? 'drop-shadow(0 4px 12px rgba(60,40,20,.12))' : undefined,
+                  pointerEvents: inkItem ? 'none' : undefined,
                 }}
-                onPointerDown={(event) => onNodeDown(event, item)}
+                onPointerDown={inkItem ? undefined : (event) => onNodeDown(event, item)}
                 onDoubleClick={(event) => {
                   event.stopPropagation()
-                  if (!canEdit || isImage || item.kind === 'pen' || item.kind === 'arrow' || (graphic && isFillMode(item.text || 'both'))) return
+                  if (!canEdit || isImage || inkItem || (graphic && isFillMode(item.text || 'both'))) return
                   setSelected(item.id)
                   setEditing(item.id)
                 }}
               >
                 {item.kind === 'sticky' && <span className="tape" aria-hidden />}
-                {graphic && <Markup item={item} />}
+                {graphic && (
+                  <Markup
+                    item={item}
+                    hit={!drawing && inkItem}
+                    onPointerDown={(event) => onNodeDown(event, item)}
+                  />
+                )}
                 {isImage ? (
                   <div className="polaroid h-full w-full" style={{ transform: active ? 'rotate(0deg)' : `rotate(${polaroidTilt(item.id)}deg)` }}>
                     {isAllowedImageUrl(item.text) ? (
-                      <img src={item.text} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />
+                      <img
+                        src={item.text}
+                        alt=""
+                        draggable={false}
+                        className="pointer-events-none h-full w-full object-contain"
+                        onLoad={(event) => {
+                          const image = event.currentTarget
+                          maybeFitImage(item, image.naturalWidth, image.naturalHeight)
+                        }}
+                      />
                     ) : (
                       <div className="grid h-full place-items-center text-sm text-muted">相片</div>
                     )}
@@ -440,43 +599,68 @@ export function CanvasView({
                     autoFocus
                     value={draftText}
                     maxLength={1000}
-                    className="h-full w-full resize-none bg-transparent p-3 text-[15px] leading-relaxed outline-none"
-                    style={{ color: isText ? item.color : '#2a2118', textAlign: item.kind === 'rect' || item.kind === 'ellipse' ? 'center' : 'left' }}
+                    className="h-full w-full resize-none bg-transparent p-4 leading-snug outline-none"
+                    style={{ color: isText ? item.color : '#2a2118', fontSize, textAlign: item.kind === 'rect' || item.kind === 'ellipse' ? 'center' : 'left' }}
                     onChange={(event) => setDraftText(event.target.value)}
                     onPointerDown={(event) => event.stopPropagation()}
                     onBlur={() => {
                       const text = draftText
                       setEditing(null)
-                      if (text !== item.text) void onUpdate(item.id, { text })
+                      if (text !== item.text) {
+                        rememberPatch(item.id, { text: item.text }, { text })
+                        void onUpdate(item.id, { text })
+                      }
                     }}
                   />
                 ) : (
                   <div
                     className={cn(
-                      'h-full w-full overflow-auto whitespace-pre-wrap break-words p-3',
-                      isText ? 'text-xl font-medium' : 'text-lg leading-relaxed',
+                      'h-full w-full overflow-auto whitespace-pre-wrap break-words p-4 font-medium leading-snug',
                       (item.kind === 'rect' || item.kind === 'ellipse') && 'grid place-items-center text-center',
+                      inkItem && 'pointer-events-none',
                     )}
+                    style={{ fontSize }}
                   >
                     {graphic ? caption : item.text ? <RichNote text={item.text} /> : active ? '按兩下輸入文字' : ''}
                   </div>
                 )}
-                {active && canEdit && (
-                  <button
-                    type="button"
-                    data-resize
-                    aria-label="調整大小"
-                    className="absolute -bottom-3 -right-3 grid h-11 w-11 place-items-center"
-                    onPointerDown={(event) => onResizeDown(event, item)}
-                  >
-                    <span className="h-3.5 w-3.5 rounded-full border-2 border-leaf bg-white" />
-                  </button>
-                )}
+                {active && canEdit &&
+                  CORNERS.map((corner) => (
+                    <button
+                      key={corner}
+                      type="button"
+                      data-resize
+                      aria-label="調整大小"
+                      className="absolute z-10 grid place-items-center"
+                      style={{
+                        width: 'calc(52px / var(--board-zoom, 1))',
+                        height: 'calc(52px / var(--board-zoom, 1))',
+                        left: corner === 'nw' || corner === 'sw' ? 0 : undefined,
+                        right: corner === 'ne' || corner === 'se' ? 0 : undefined,
+                        top: corner === 'nw' || corner === 'ne' ? 0 : undefined,
+                        bottom: corner === 'sw' || corner === 'se' ? 0 : undefined,
+                        transform:
+                          corner === 'nw' ? 'translate(-40%, -40%)' : corner === 'ne' ? 'translate(40%, -40%)' : corner === 'sw' ? 'translate(-40%, 40%)' : 'translate(40%, 40%)',
+                        pointerEvents: 'auto',
+                      }}
+                      onPointerDown={(event) => onResizeDown(event, item, corner)}
+                    >
+                      <span
+                        className="rounded-full border-leaf bg-white"
+                        style={{
+                          width: 'calc(22px / var(--board-zoom, 1))',
+                          height: 'calc(22px / var(--board-zoom, 1))',
+                          borderWidth: 'calc(3px / var(--board-zoom, 1))',
+                        }}
+                      />
+                    </button>
+                  ))}
                 {active && canDelete(item) && (
                   <button
                     type="button"
                     aria-label="刪除"
                     className="absolute -right-3 -top-3 grid h-11 w-11 place-items-center rounded-full bg-white text-danger shadow"
+                    style={{ pointerEvents: 'auto', width: 'calc(44px / var(--board-zoom, 1))', height: 'calc(44px / var(--board-zoom, 1))' }}
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => {
                       void onDelete(item.id)
@@ -490,10 +674,19 @@ export function CanvasView({
             )
           })}
           {draft && (
-            <div
-              className="absolute border-2 border-dashed border-leaf/70 bg-white/30"
-              style={{ left: draft.x, top: draft.y, width: draft.w, height: draft.h }}
-            />
+            <div className="absolute border-2 border-dashed border-leaf/70 bg-white/30" style={{ left: draft.x, top: draft.y, width: draft.w, height: draft.h }} />
+          )}
+          {liveFrame && liveInk && (
+            <svg className="pointer-events-none absolute overflow-visible" style={{ left: liveFrame.x, top: liveFrame.y, width: Math.max(1, liveFrame.w), height: Math.max(1, liveFrame.h) }}>
+              <polyline
+                points={liveInk.map((point) => `${point.x - liveFrame.x},${point.y - liveFrame.y}`).join(' ')}
+                fill="none"
+                stroke={color}
+                strokeWidth={8}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           )}
         </div>
         {items.length === 0 && !draft && (
@@ -501,7 +694,7 @@ export function CanvasView({
             <div className="max-w-sm rounded-2xl bg-paper/95 p-5 shadow">
               <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '畫布已鎖定' : '這塊畫布還是空的'}</p>
               <p className="mt-2 text-base leading-7 text-muted">
-                {locked && role !== 'teacher' ? '而家只可以睇，未可以新貼。' : '喺下面揀工具，再喺空白處撳一下。'}
+                {locked && role !== 'teacher' ? '現在只可以看，還不能新增貼文。' : '在下面選擇工具，再在空白處按一下。'}
               </p>
             </div>
           </div>
@@ -518,15 +711,8 @@ export function CanvasView({
                 type="button"
                 disabled={!canEdit && entry.id !== 'select'}
                 aria-pressed={pressed}
-                onClick={() => {
-                  setTool(entry.id)
-                  if (entry.id === 'text') setColor(TEXT_COLORS[0])
-                  else if (tool === 'text') setColor(NOTE_COLORS[0])
-                }}
-                className={cn(
-                  'pressable flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold',
-                  pressed ? 'text-white' : 'hover:bg-white/70',
-                )}
+                onClick={() => chooseTool(entry.id)}
+                className={cn('pressable flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold', pressed ? 'text-white' : 'hover:bg-white/70')}
                 style={{ background: pressed ? entry.tone : 'transparent', color: pressed ? '#fff' : entry.tone }}
               >
                 <entry.icon className="h-4 w-4" />
@@ -535,13 +721,7 @@ export function CanvasView({
             )
           })}
           {onUpload && (
-            <label
-              className={cn(
-                'pressable relative flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold',
-                !canEdit && 'opacity-40',
-              )}
-              style={{ color: '#1f7a54' }}
-            >
+            <label className={cn('pressable relative flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold', !canEdit && 'opacity-40')} style={{ color: '#1f7a54' }}>
               <ImageIcon className="h-4 w-4" />
               相片
               <input type="file" accept="image/*" disabled={!canEdit} className="absolute inset-0 cursor-pointer opacity-0" onChange={(event) => void onPhoto(event)} />
@@ -561,6 +741,22 @@ export function CanvasView({
             />
           ))}
           <span className="mx-1 h-8 w-px bg-line" />
+          <button
+            type="button"
+            disabled={!history.canUndo}
+            onClick={() => void history.undo()}
+            className="pressable grid h-14 min-w-[5.75rem] shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
+          >
+            復原上一筆
+          </button>
+          <button
+            type="button"
+            disabled={!history.canRedo}
+            onClick={() => void history.redo()}
+            className="pressable grid h-14 min-w-16 shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
+          >
+            重做
+          </button>
           <IconButton label="縮小" onClick={() => zoomBy(1 / 1.15)}>
             <ZoomOut className="h-4 w-4" />
           </IconButton>

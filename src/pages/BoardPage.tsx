@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError, api, boardTokenKey, getTeacherToken } from '@/lib/api'
+import { CARD_H, CARD_W } from '@/components/cardFrame'
 import { prepareImageFile } from '@/lib/imageFile'
 import { useIdentity } from '@/lib/identity'
 import { useBoardSocket } from '@/lib/socket'
@@ -61,6 +62,7 @@ export function BoardPage() {
   const [activePageId, setActivePageId] = useState<string | null>(null)
   const [pendingPageDelete, setPendingPageDelete] = useState<string | null>(null)
   const interacting = useRef(new Set<string>())
+  const canvasFrame = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
   const tokenRef = useRef<string | null>(null)
   const nickPrompted = useRef('')
   const activePageRef = useRef<string | null>(null)
@@ -373,7 +375,7 @@ export function BoardPage() {
     const payload = {
       ...input,
       text: input.text ?? '',
-      fontSize: input.fontSize ?? 28,
+      fontSize: input.fontSize ?? 32,
       clientId,
       authorName: authorName(),
       pageId: phase.kind === 'ready' && phase.board.type === 'sandbox' ? activePageRef.current : undefined,
@@ -436,6 +438,19 @@ export function BoardPage() {
     }
   }
 
+  async function eraseItem(id: string) {
+    const token = tokenRef.current
+    if (!token) return false
+    try {
+      await api(`/api/boards/${boardId}/items/${id}?clientId=${encodeURIComponent(clientId)}`, { method: 'DELETE', token })
+      setPhase((prev) => (prev.kind === 'ready' ? { ...prev, items: prev.items.filter((item) => item.id !== id) } : prev))
+      return true
+    } catch (error) {
+      setBanner(error instanceof ApiError ? error.message : '刪除失敗')
+      return false
+    }
+  }
+
   async function removeTarget(target: Post | CanvasItem) {
     const token = tokenRef.current
     if (!token) return
@@ -470,7 +485,7 @@ export function BoardPage() {
       setActivePageId(result.page.id)
       return result.page
     } catch (error) {
-      setBanner(error instanceof ApiError ? error.message : '未能開新版面')
+      setBanner(error instanceof ApiError ? error.message : '未能開啟新版面')
       return null
     }
   }
@@ -487,7 +502,7 @@ export function BoardPage() {
       setPhase((prev) => (prev.kind === 'ready' ? { ...prev, pages: upsert(prev.pages, result.page) } : prev))
       return true
     } catch (error) {
-      setBanner(error instanceof ApiError ? error.message : '未能改名')
+      setBanner(error instanceof ApiError ? error.message : '未能更改名稱')
       return false
     }
   }
@@ -583,7 +598,7 @@ export function BoardPage() {
           <Logo />
           <h1 className="mt-6 font-serif text-4xl font-bold">{phase.meta.title}</h1>
           {phase.meta.groupLabel && <p className="mt-2 text-lg text-leaf">{phase.meta.groupLabel}</p>}
-          <p className="mt-3 text-lg text-muted">問老師攞密碼。</p>
+          <p className="mt-3 text-lg text-muted">請向老師索取密碼。</p>
           <div className="mt-5 space-y-2">
             <Label htmlFor="board-password">學生密碼</Label>
             <Input
@@ -640,7 +655,7 @@ export function BoardPage() {
       {board.locked && (
         <div className="flex flex-wrap items-center justify-between gap-3 bg-amber-100 px-4 py-3 text-base text-ink">
           <p className="font-semibold text-warn">
-            {board.type === 'sandbox' ? '老師暫停咗編輯' : '而家鎖定咗，學生暫時唔可以新貼。'}
+            {board.type === 'sandbox' ? '老師已暫停編輯' : '現已鎖定，學生暫時不能新增貼文。'}
           </p>
           {phase.role === 'teacher' && (
             <Button type="button" size="lg" onClick={() => void toggleLock()}>
@@ -651,7 +666,7 @@ export function BoardPage() {
       )}
       {needsNickname && !nickOpen && (
         <div className="flex flex-wrap items-center justify-between gap-3 bg-paper px-4 py-3 text-base">
-          <p>你叫咩名？其他同學會見到呢個名。</p>
+          <p>你叫什麼名字？其他同學會看到這個名字。</p>
           <Button type="button" size="lg" onClick={() => setNickOpen(true)}>
             開始
           </Button>
@@ -686,6 +701,7 @@ export function BoardPage() {
             const item = phase.items.find((entry) => entry.id === id)
             if (item) setPendingDelete(item)
           }}
+          onRemove={eraseItem}
           onLive={(id, patch) => send({ type: 'live', entity: 'item', id, pageId: activePageRef.current ?? undefined, clientId, ...patch })}
           onInteract={(id, active) => {
             if (active) interacting.current.add(id)
@@ -728,6 +744,10 @@ export function BoardPage() {
             const item = phase.items.find((entry) => entry.id === id)
             if (item) setPendingDelete(item)
           }}
+          onRemove={eraseItem}
+          onViewFrame={(frame) => {
+            canvasFrame.current = frame
+          }}
           onLive={(id, patch) => send({ type: 'live', entity: 'item', id, ...patch })}
           onInteract={(id, active) => {
             if (active) interacting.current.add(id)
@@ -764,6 +784,7 @@ export function BoardPage() {
             paused={dropsPaused}
             pageId={activePageId}
             needsPage={board.type === 'sandbox'}
+            getView={() => (board.type === 'sandbox' ? { x: 36, y: 36, w: CARD_W - 72, h: CARD_H - 72 } : canvasFrame.current)}
             open={folderOpen}
             onOpenChange={setFolderOpen}
             onPaused={setDropsPaused}
@@ -795,7 +816,7 @@ export function BoardPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>刪除這個版面？</DialogTitle>
-            <DialogDescription>這個版面同上面嘅內容會一併刪除，同學都會睇唔到。</DialogDescription>
+            <DialogDescription>這個版面和上面的內容會一併刪除，同學都將看不到。</DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="outline" size="lg" onClick={() => setPendingPageDelete(null)}>

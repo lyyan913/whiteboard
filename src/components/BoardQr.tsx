@@ -74,7 +74,7 @@ export function BoardQr({
         {png ? (
           <img src={png} alt={heading} data-upload-url={url} className="aspect-square w-full" />
         ) : (
-          <div className="grid aspect-square place-items-center text-base text-muted">{failed ? 'QR 碼暫時產生唔到' : '正在產生 QR 碼…'}</div>
+          <div className="grid aspect-square place-items-center text-base text-muted">{failed ? 'QR 碼暫時無法產生' : '正在產生 QR 碼…'}</div>
         )}
       </div>
       <p className="text-center text-base text-muted">{hint}</p>

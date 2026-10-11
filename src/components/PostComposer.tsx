@@ -93,8 +93,8 @@ export function PostComposer({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>{editing ? '編輯貼文' : '貼咩？'}</DialogTitle>
-          <DialogDescription>{editing ? '改完再貼上去。' : '揀一種，然後寫低內容。'}</DialogDescription>
+          <DialogTitle>{editing ? '編輯貼文' : '新增貼文'}</DialogTitle>
+          <DialogDescription>{editing ? '修改後再貼上。' : '選擇一種，然後寫下內容。'}</DialogDescription>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => void submit(event)}>
           {!editing && (
@@ -191,7 +191,7 @@ export function PostComposer({
               取消
             </Button>
             <Button type="submit" size="lg" disabled={saving}>
-              {saving ? '請稍等…' : '貼上去'}
+              {saving ? '請稍等…' : '貼上'}
             </Button>
           </div>
         </form>

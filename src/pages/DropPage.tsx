@@ -31,7 +31,7 @@ export function DropPage() {
       .catch((caught) => {
         if (cancelled) return
         if (caught instanceof ApiError && caught.status === 404) setMissing(true)
-        else setError(caught instanceof ApiError ? caught.message : '暫時打唔開')
+        else setError(caught instanceof ApiError ? caught.message : '暫時無法開啟')
       })
     return () => {
       cancelled = true
@@ -41,7 +41,7 @@ export function DropPage() {
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!info || files.length === 0) {
-      setError('請先揀相或 PDF')
+      setError('請先選擇相片或 PDF')
       return
     }
     setBusy(true)
@@ -89,7 +89,7 @@ export function DropPage() {
     return (
       <Shell>
         <h1 className="font-serif text-3xl font-bold">{info.title}</h1>
-        <p className="mt-4 text-lg">老師暫停咗上載。請遲啲再交。</p>
+        <p className="mt-4 text-lg">老師已暫停上載。請稍後再交。</p>
       </Shell>
     )
   }
@@ -97,8 +97,8 @@ export function DropPage() {
   if (done) {
     return (
       <Shell>
-        <h1 className="font-serif text-4xl font-bold">已交俾老師 ✅</h1>
-        <p className="mt-3 text-lg text-muted">檔案已放進老師的「學生上載」資料夾。24 小時後會自動刪除；老師放上板的副本會留低。</p>
+        <h1 className="font-serif text-4xl font-bold">已交給老師 ✅</h1>
+        <p className="mt-3 text-lg text-muted">檔案已放進老師的「學生作品」。24 小時後會自動刪除；老師放上板的副本會保留。</p>
         <Button
           type="button"
           size="lg"
@@ -118,7 +118,7 @@ export function DropPage() {
     return (
       <Shell>
         <h1 className="font-serif text-3xl font-bold">{info.title}</h1>
-        <p className="mt-2 text-lg text-muted">問老師攞密碼，然後先交作品。</p>
+        <p className="mt-2 text-lg text-muted">請向老師索取密碼，然後才提交作品。</p>
         <form
           className="mt-5 space-y-4"
           onSubmit={(event) => {
@@ -150,11 +150,11 @@ export function DropPage() {
       <p className="mt-2 text-lg text-muted">{info.title}</p>
       <form className="mt-5 space-y-4" onSubmit={(event) => void submit(event)}>
         <div className="space-y-2">
-          <Label htmlFor="drop-name">你叫咩名？</Label>
+          <Label htmlFor="drop-name">你叫什麼名字？</Label>
           <Input id="drop-name" maxLength={20} placeholder="可留空" value={name} onChange={(event) => setName(event.target.value)} />
         </div>
         <label className="relative flex min-h-16 cursor-pointer items-center justify-center overflow-hidden rounded-2xl bg-stamp px-4 text-lg font-semibold text-white">
-          揀相／檔案
+          選擇相片／檔案
           <input
             type="file"
             accept="image/*,.pdf,application/pdf"

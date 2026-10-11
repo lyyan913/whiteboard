@@ -82,8 +82,8 @@ export function inkFrame(points: InkPoint[], pad = 18) {
   }
   const spanW = Math.max(1, maxX - minX)
   const spanH = Math.max(1, maxY - minY)
-  const w = Math.max(48, spanW + pad * 2)
-  const h = Math.max(36, spanH + pad * 2)
+  const w = Math.max(8, spanW + pad * 2)
+  const h = Math.max(8, spanH + pad * 2)
   const x = minX - (w - spanW) / 2
   const y = minY - (h - spanH) / 2
   return {

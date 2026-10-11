@@ -37,8 +37,8 @@ export function NicknameDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>你叫咩名？</DialogTitle>
-          <DialogDescription>其他同學會見到呢個名。</DialogDescription>
+          <DialogTitle>你叫什麼名字？</DialogTitle>
+          <DialogDescription>其他同學會看到這個名字。</DialogDescription>
         </DialogHeader>
         <form
           className="space-y-4"
@@ -46,7 +46,7 @@ export function NicknameDialog({
             event.preventDefault()
             const next = name.trim()
             if (!next) {
-              setError('請寫低你的名')
+              setError('請寫下你的名字')
               return
             }
             onSave(next)
@@ -54,7 +54,7 @@ export function NicknameDialog({
           }}
         >
           <div className="space-y-2">
-            <Label htmlFor="nickname">你的名</Label>
+            <Label htmlFor="nickname">你的名字</Label>
             <Input
               id="nickname"
               value={name}

@@ -99,7 +99,7 @@ export function ClassroomPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="font-serif text-4xl font-bold">{workspace.name}</h1>
-            <p className="mt-1 text-lg text-muted">一個連結入面有所有壁報。學生打開就睇到其他人的作品。</p>
+            <p className="mt-1 text-lg text-muted">一個連結裡面有所有壁報。學生打開就能看到其他人的作品。</p>
           </div>
           {teacher && (
             <Button type="button" size="lg" className="w-full sm:w-auto" onClick={() => setCreating(true)}>
@@ -128,9 +128,9 @@ export function ClassroomPage() {
           </Button>
           {!teacher && (
             <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-base text-muted">你而家看到全班的壁報。撳一塊板，就可以看裡面所有人的作品。</p>
+              <p className="text-base text-muted">你現在看到全班的壁報。按一塊板，就可以看裡面所有人的作品。</p>
               <Button type="button" variant="outline" onClick={() => setLoginOpen(true)}>
-                我係老師
+                我是老師
               </Button>
             </div>
           )}
@@ -145,7 +145,7 @@ export function ClassroomPage() {
         {boards.length === 0 ? (
           <div className="mt-8 rounded-2xl border border-dashed border-line bg-paper px-6 py-10">
             <ol className="space-y-3 text-lg">
-              <li>① 老師撳「＋ 新建壁報」</li>
+              <li>① 老師按「＋ 新建壁報」</li>
               <li>② 把上面這個課室連結交給學生</li>
               <li>③ 學生打開就看到所有人的作品</li>
             </ol>

@@ -159,8 +159,8 @@ function Empty({ floating = false }: { floating?: boolean }) {
     <div className={floating ? 'pointer-events-none absolute inset-x-0 top-24 z-10 flex justify-center px-4' : 'grid min-h-[50dvh] place-items-center'}>
       <div className="note-card max-w-sm bg-paper p-6 text-center text-ink">
         <p className="font-serif text-2xl font-bold">
-          <span className="lg:hidden">撳右下「＋」加第一張貼文</span>
-          <span className="hidden lg:inline">撳上面「＋ 新增貼文」加第一張貼文</span>
+          <span className="lg:hidden">按右下角「＋」加入第一張貼文</span>
+          <span className="hidden lg:inline">按上方「＋ 新增貼文」加入第一張貼文</span>
         </p>
       </div>
     </div>

@@ -410,7 +410,7 @@ function mapItem(row: ItemRow): CanvasItem {
 
 function fontSizeOf(value: number | bigint | null | undefined) {
   const size = num(value ?? 0)
-  if (size === 4 || size === 8 || size === 14 || size === 18 || size === 28 || size === 40) return size
+  if (size === 4 || size === 8 || size === 14 || size === 18 || size === 28 || size === 32 || size === 40) return size
   return 28
 }
 

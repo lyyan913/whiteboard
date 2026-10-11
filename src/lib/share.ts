@@ -35,7 +35,7 @@ export function shareMessage(
   return [
     `【同窗】${board.title}`,
     board.groupLabel ? `組別：${board.groupLabel}` : '',
-    board.type === 'sandbox' ? '學生開呢條連結，揀版面，小組一齊貼成果。' : '',
+    board.type === 'sandbox' ? '學生打開這條連結，選擇版面，小組一起貼上成果。' : '',
     `連結：${url}`,
     password ? `密碼：${password}` : '不用密碼，打開連結即可進入。',
   ]

@@ -184,8 +184,13 @@ export function BoardChrome({
               </Button>
             )}
             {role === 'teacher' && onFolder && (
-              <Button type="button" variant="outline" onClick={onFolder}>
-                資料夾{dropCount > 0 ? ` ${dropCount}` : ''}
+              <Button type="button" variant="secondary" onClick={onFolder} aria-label={dropCount > 0 ? `學生作品，${dropCount} 份` : '學生作品'}>
+                學生作品
+                {dropCount > 0 && (
+                  <span className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-full bg-white px-1.5 text-sm font-bold leading-none text-leaf">
+                    {dropCount}
+                  </span>
+                )}
               </Button>
             )}
             {role === 'teacher' && onLink && (
@@ -224,7 +229,7 @@ export function BoardChrome({
                   </MenuItem>
                 )}
                 {onStudentPagesToggle && (
-                  <MenuItem onClick={onStudentPagesToggle}>{board.allowStudentPages ? '暫停新版面' : '學生可開新版面'}</MenuItem>
+                  <MenuItem onClick={onStudentPagesToggle}>{board.allowStudentPages ? '暫停新版面' : '學生可新增版面'}</MenuItem>
                 )}
                 {onSettings && <MenuItem onClick={onSettings}>設定</MenuItem>}
               </PopoverMenu>

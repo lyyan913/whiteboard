@@ -48,7 +48,7 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: bool
         <div className="grid min-h-dvh place-items-center px-4 text-center">
           <div>
             <h1 className="font-serif text-3xl font-bold">頁面發生問題</h1>
-            <p className="mt-3 text-sm text-ink/70">請重新整理。如果仍有問題，請老師再開一次連結。</p>
+            <p className="mt-3 text-sm text-ink/70">請重新整理。如果仍有問題，請老師再打開一次連結。</p>
             <button type="button" className="mt-4 text-sm text-leaf underline" onClick={() => window.location.reload()}>
               重新整理
             </button>

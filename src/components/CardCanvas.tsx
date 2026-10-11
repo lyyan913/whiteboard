@@ -1,6 +1,7 @@
 import { ArrowUpRight, Circle, Cloud, Heart, Image as ImageIcon, MessageCircle, MousePointer2, Pencil, Shapes, Square, Star, StickyNote, Trash2, Triangle, Type } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { DRAW_COLOR_LABELS, DRAW_COLORS, FONT_SIZES, NOTE_COLOR_LABELS, NOTE_COLORS, STROKE_WIDTHS, STROKE_WIDTH_LABELS, TEXT_COLOR_LABELS, TEXT_COLORS, isNoteColor, isTextColor } from '../../shared/colors'
+import { DRAW_COLOR_LABELS, DRAW_COLORS, FONT_SIZES, NOTE_COLOR_LABELS, NOTE_COLORS, STROKE_WIDTHS, STROKE_WIDTH_LABELS, TEXT_COLOR_LABELS, TEXT_COLORS, isFontSize, isNoteColor, isTextColor } from '../../shared/colors'
+import { containBox, resizeBox, type Corner } from '../../shared/geometry'
 import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk, type FillMode, type StrokeStyle } from '../../shared/markup'
 import { isAllowedImageUrl } from '../../shared/media'
 import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
@@ -8,20 +9,21 @@ import { makeId } from '../../shared/text'
 import { Markup } from '@/components/Markup'
 import { CARD_H, CARD_W, cardBounds, clampToCard } from '@/components/cardFrame'
 import { RichNote } from '@/components/RichNote'
+import { loadImageSize } from '@/lib/fitImage'
+import { useEditHistory } from '@/lib/history'
 import { useAppearIds } from '@/lib/useAppearIds'
 import { cn, polaroidTilt } from '@/lib/utils'
 
 type Tool = 'select' | 'text' | 'sticky' | 'pen' | 'arrow' | 'image' | ShapeKind
 type ShapeKind = 'rect' | 'ellipse' | 'star' | 'heart' | 'triangle' | 'cloud' | 'bubble'
-type Corner = 'nw' | 'ne' | 'sw' | 'se'
 
 const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2; tone: string }[] = [
-  { id: 'select', label: '揀', icon: MousePointer2, tone: '#1f1a14' },
+  { id: 'select', label: '選擇', icon: MousePointer2, tone: '#1f1a14' },
   { id: 'pen', label: '畫筆', icon: Pencil, tone: '#c4492c' },
   { id: 'text', label: '文字', icon: Type, tone: '#1d4e89' },
   { id: 'sticky', label: '便利貼', icon: StickyNote, tone: '#c99a06' },
   { id: 'rect', label: '圖形', icon: Shapes, tone: '#e07b24' },
-  { id: 'arrow', label: '箭咀', icon: ArrowUpRight, tone: '#6b4c9a' },
+  { id: 'arrow', label: '箭頭', icon: ArrowUpRight, tone: '#6b4c9a' },
 ]
 
 const SHAPE_TONE = '#e07b24'
@@ -36,7 +38,7 @@ const SHAPES: { id: ShapeKind; label: string; icon: typeof Square }[] = [
   { id: 'bubble', label: '對話框', icon: MessageCircle },
 ]
 
-const SIZE_LABEL: Record<(typeof FONT_SIZES)[number], string> = { 18: '細', 28: '中', 40: '大' }
+const SIZE_LABEL: Record<(typeof FONT_SIZES)[number], string> = { 18: '小', 32: '中', 40: '大' }
 
 function colorName(kind: ItemKind, swatch: string) {
   if (kind === 'text') return TEXT_COLOR_LABELS[swatch as keyof typeof TEXT_COLOR_LABELS] ?? '顏色'
@@ -44,12 +46,41 @@ function colorName(kind: ItemKind, swatch: string) {
 }
 
 function defaultSize(kind: Tool) {
-  if (kind === 'text') return { w: 280, h: 96 }
-  if (kind === 'sticky') return { w: 240, h: 180 }
-  if (kind === 'arrow') return { w: 180, h: 120 }
-  if (kind === 'cloud' || kind === 'bubble') return { w: 220, h: 160 }
-  if (kind === 'star' || kind === 'heart' || kind === 'triangle' || kind === 'ellipse') return { w: 160, h: 160 }
-  return { w: 220, h: 150 }
+  if (kind === 'text') return { w: 480, h: 170 }
+  if (kind === 'sticky') return { w: 420, h: 320 }
+  if (kind === 'arrow') return { w: 300, h: 200 }
+  if (kind === 'cloud' || kind === 'bubble') return { w: 380, h: 280 }
+  if (kind === 'star' || kind === 'heart' || kind === 'triangle' || kind === 'ellipse') return { w: 280, h: 280 }
+  return { w: 380, h: 260 }
+}
+
+function readingSize(item: CanvasItem) {
+  if (item.kind === 'text' || item.kind === 'sticky') return isFontSize(item.fontSize) ? item.fontSize : 32
+  return 32
+}
+
+function nearlySame(before: Partial<CanvasItem>, after: Partial<CanvasItem>) {
+  const keys = Object.keys(after) as (keyof CanvasItem)[]
+  return keys.every((key) => {
+    const left = before[key]
+    const right = after[key]
+    if (typeof left === 'number' && typeof right === 'number') return Math.abs(left - right) < 0.5
+    return left === right
+  })
+}
+
+function placeCard(box: { x: number; y: number; w: number; h: number }, proportional: boolean) {
+  let { x, y, w, h } = box
+  if (proportional && (w > CARD_W || h > CARD_H)) {
+    const fittedSize = containBox(CARD_W, CARD_H, w, h)
+    const cx = x + w / 2
+    const cy = y + h / 2
+    w = fittedSize.w
+    h = fittedSize.h
+    x = cx - w / 2
+    y = cy - h / 2
+  }
+  return clampToCard(x, y, w, h)
 }
 
 function graphicKind(kind: string) {
@@ -67,6 +98,7 @@ export function CardCanvas({
   onLocal,
   onUpdate,
   onDelete,
+  onRemove,
   onLive,
   onInteract,
   onError,
@@ -81,6 +113,7 @@ export function CardCanvas({
   onLocal: (id: string, patch: Partial<CanvasItem>) => void
   onUpdate: (id: string, patch: Partial<CanvasItem>) => Promise<void> | void
   onDelete: (id: string) => Promise<void> | void
+  onRemove: (id: string) => Promise<boolean>
   onLive: (id: string, patch: { x?: number; y?: number; w?: number; h?: number }) => void
   onInteract: (id: string, active: boolean) => void
   onError: (message: string) => void
@@ -103,7 +136,7 @@ export function CardCanvas({
   const [ready, setReady] = useState(false)
   const [tool, setTool] = useState<Tool>('select')
   const [color, setColor] = useState<string>(DRAW_COLORS[1])
-  const [textSize, setTextSize] = useState<(typeof FONT_SIZES)[number]>(28)
+  const [textSize, setTextSize] = useState<(typeof FONT_SIZES)[number]>(32)
   const [strokeWidth, setStrokeWidth] = useState<(typeof STROKE_WIDTHS)[number]>(8)
   const [strokeStyle, setStrokeStyle] = useState<StrokeStyle>('solid')
   const [fillMode, setFillMode] = useState<FillMode>('both')
@@ -115,6 +148,18 @@ export function CardCanvas({
   const canEdit = !locked || role === 'teacher'
   const selectedItem = items.find((item) => item.id === selected) ?? null
   const appear = useAppearIds(items.map((item) => item.id).join('\u0001'), pageId)
+  const drawing = tool === 'pen' || tool === 'arrow'
+  const history = useEditHistory({ onCreate, onUpdate, onLocal, onRemove })
+
+  function rememberCreate(item: CanvasItem | null) {
+    if (item) history.note({ type: 'create', item })
+    return item
+  }
+
+  function rememberPatch(id: string, before: Partial<CanvasItem>, after: Partial<CanvasItem>) {
+    if (nearlySame(before, after)) return
+    history.note({ type: 'patch', id, before, after })
+  }
 
   useEffect(() => {
     setSelected(null)
@@ -122,7 +167,8 @@ export function CardCanvas({
     editingRef.current = null
     setDraft(null)
     setInk(null)
-  }, [pageId])
+    history.reset()
+  }, [pageId, history.reset])
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -169,7 +215,10 @@ export function CardCanvas({
     const text = draftRef.current
     editingRef.current = null
     setEditing(null)
-    if (item && text !== item.text) void onUpdate(id, { text })
+    if (item && text !== item.text) {
+      rememberPatch(id, { text: item.text }, { text })
+      void onUpdate(id, { text })
+    }
   }
 
   function beginEdit(item: CanvasItem) {
@@ -185,6 +234,17 @@ export function CardCanvas({
       if (event.isComposing) return
       const target = event.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+      if ((event.metaKey || event.ctrlKey) && (event.key === 'z' || event.key === 'Z')) {
+        event.preventDefault()
+        if (event.shiftKey) void history.redo()
+        else void history.undo()
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && (event.key === 'y' || event.key === 'Y')) {
+        event.preventDefault()
+        void history.redo()
+        return
+      }
       if ((event.key === 'Delete' || event.key === 'Backspace') && selected) {
         const item = itemsRef.current.find((entry) => entry.id === selected)
         if (!item || !canDelete(item)) return
@@ -201,7 +261,7 @@ export function CardCanvas({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [selected, onDelete, role, locked, clientId])
+  }, [selected, onDelete, role, locked, clientId, history.undo, history.redo])
 
   function canDelete(item: CanvasItem) {
     if (locked && role !== 'teacher') return false
@@ -210,6 +270,7 @@ export function CardCanvas({
 
   function chooseTool(next: Tool) {
     setTool(next)
+    if (next === 'pen' || next === 'arrow') setSelected(null)
     if (next === 'text' && !isTextColor(color)) setColor(TEXT_COLORS[0])
     if (next === 'sticky' && !isNoteColor(color)) setColor(NOTE_COLORS[0])
     if ((next === 'pen' || next === 'arrow' || isShapeKind(next)) && color === TEXT_COLORS[0]) setColor(DRAW_COLORS[1])
@@ -232,11 +293,7 @@ export function CardCanvas({
       color,
       text: encodeInk(strokeStyle, relative),
       fontSize: strokeWidth,
-    }).then((created) => {
-      if (!created) return
-      setTool('select')
-      setSelected(created.id)
-    })
+    }).then((created) => rememberCreate(created))
   }
 
   function onCardPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -248,7 +305,7 @@ export function CardCanvas({
       setSelected(null)
       return
     }
-    if (selected) {
+    if (selected && tool !== 'pen' && tool !== 'arrow') {
       setSelected(null)
       return
     }
@@ -310,12 +367,14 @@ export function CardCanvas({
         ...rect,
         color: kind === 'sticky' && !isNoteColor(color) ? NOTE_COLORS[0] : color,
         text: isShapeKind(kind) ? fillMode : '',
-        fontSize: kind === 'text' ? textSize : isShapeKind(kind) ? strokeWidth : 28,
+        fontSize: kind === 'text' ? textSize : isShapeKind(kind) ? strokeWidth : 32,
       }).then((created) => {
         if (!created) return
+        const saved = rememberCreate(created)
+        if (!saved) return
         setTool('select')
-        setSelected(created.id)
-        if (created.kind === 'text' || created.kind === 'sticky') beginEdit(created)
+        setSelected(saved.id)
+        if (saved.kind === 'text' || saved.kind === 'sticky') beginEdit(saved)
       })
     }
     window.addEventListener('pointermove', move)
@@ -329,53 +388,98 @@ export function CardCanvas({
     try {
       const url = await onUpload(file)
       if (!url) return
-      const rect = clampToCard(CARD_W / 2 - 180, CARD_H / 2 - 130, 360, 260)
+      const natural = await loadImageSize(file)
+      const size = natural ? containBox(CARD_W * 0.9, CARD_H * 0.9, natural.width, natural.height) : { w: 720, h: 540 }
+      const rect = clampToCard((CARD_W - size.w) / 2, (CARD_H - size.h) / 2, size.w, size.h)
       const created = await onCreate({
         id: makeId(12),
         kind: 'image',
         ...rect,
         color: NOTE_COLORS[5],
         text: url,
-        fontSize: 28,
+        fontSize: 32,
       })
-      if (created) {
+      const saved = rememberCreate(created)
+      if (saved) {
+        fitted.current.add(saved.id)
         setTool('select')
-        setSelected(created.id)
+        setSelected(saved.id)
       }
     } catch (error) {
       onError(error instanceof Error ? error.message : '上載失敗')
     }
   }
 
-  function onNodeDown(event: ReactPointerEvent<HTMLDivElement>, item: CanvasItem) {
+  function onNodeDown(event: ReactPointerEvent, item: CanvasItem) {
     event.stopPropagation()
+    if (drawing) return
     if (editingRef.current && editingRef.current !== item.id) commitEdit()
     setSelected(item.id)
     if (!canEdit || tool !== 'select') return
     if (editingRef.current === item.id) return
-    if ((event.target as HTMLElement).closest('[data-resize], textarea, button')) return
+    const target = event.target
+    if (target instanceof Element && target.closest('[data-resize], textarea, button')) return
+    const before = { x: item.x, y: item.y, w: item.w, h: item.h, z: item.z }
     const maxZ = Math.max(1, ...itemsRef.current.map((entry) => entry.z)) + 1
+    const pointerId = event.pointerId
+    const pointers = new Map<number, { x: number; y: number }>()
+    pointers.set(pointerId, { x: event.clientX, y: event.clientY })
+    const origin = { x: item.x, y: item.y, w: item.w, h: item.h }
+    let placed = { x: item.x, y: item.y, w: item.w, h: item.h }
+    let mode: 'drag' | 'pinch' = 'drag'
+    let pinchDist = 1
     const start = screenToCard(event.clientX, event.clientY)
-    let x = item.x
-    let y = item.y
     onInteract(item.id, true)
     onLocal(item.id, { z: maxZ })
     const move = (pointer: PointerEvent) => {
+      if (pointers.has(pointer.pointerId)) pointers.set(pointer.pointerId, { x: pointer.clientX, y: pointer.clientY })
+      if (mode === 'pinch' && pointers.size >= 2) {
+        const [a, b] = [...pointers.values()]
+        const dist = Math.max(8, Math.hypot(a.x - b.x, a.y - b.y))
+        const scaled = resizeBox(origin, 'se', origin.w * (dist / pinchDist - 1), origin.h * (dist / pinchDist - 1), true)
+        placed = placeCard(
+          { x: origin.x + origin.w / 2 - scaled.w / 2, y: origin.y + origin.h / 2 - scaled.h / 2, w: scaled.w, h: scaled.h },
+          true,
+        )
+        onLocal(item.id, { ...placed, z: maxZ })
+        emitLive(item.id, placed)
+        return
+      }
+      if (pointer.pointerId !== pointerId) return
       const point = screenToCard(pointer.clientX, pointer.clientY)
       const next = clampToCard(item.x + (point.x - start.x), item.y + (point.y - start.y), item.w, item.h)
-      x = next.x
-      y = next.y
-      onLocal(item.id, { x, y, z: maxZ })
-      emitLive(item.id, { x, y })
+      placed = { x: next.x, y: next.y, w: item.w, h: item.h }
+      onLocal(item.id, { x: placed.x, y: placed.y, z: maxZ })
+      emitLive(item.id, { x: placed.x, y: placed.y })
     }
-    const up = () => {
+    const extraDown = (pointer: PointerEvent) => {
+      pointers.set(pointer.pointerId, { x: pointer.clientX, y: pointer.clientY })
+      if (item.kind === 'image' && pointers.size >= 2 && mode === 'drag') {
+        mode = 'pinch'
+        const [a, b] = [...pointers.values()]
+        pinchDist = Math.max(12, Math.hypot(a.x - b.x, a.y - b.y))
+        origin.x = placed.x
+        origin.y = placed.y
+        origin.w = placed.w
+        origin.h = placed.h
+      }
+    }
+    const up = (pointer: PointerEvent) => {
+      pointers.delete(pointer.pointerId)
+      if (pointers.size > 0) return
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      emitLive(item.id, { x, y }, true)
-      void Promise.resolve(onUpdate(item.id, { x, y, z: maxZ })).finally(() => onInteract(item.id, false))
+      window.removeEventListener('pointercancel', up)
+      window.removeEventListener('pointerdown', extraDown)
+      emitLive(item.id, placed, true)
+      const after = { ...placed, z: maxZ }
+      void Promise.resolve(onUpdate(item.id, after)).finally(() => onInteract(item.id, false))
+      rememberPatch(item.id, before, after)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    window.addEventListener('pointerdown', extraDown)
   }
 
   function onResizeDown(event: ReactPointerEvent<HTMLButtonElement>, item: CanvasItem, corner: Corner) {
@@ -383,14 +487,13 @@ export function CardCanvas({
     event.preventDefault()
     if (!canEdit) return
     onInteract(item.id, true)
+    const before = { x: item.x, y: item.y, w: item.w, h: item.h }
     const start = screenToCard(event.clientX, event.clientY)
     const origin = { x: item.x, y: item.y, w: item.w, h: item.h }
     let placed = origin
     const move = (pointer: PointerEvent) => {
       const point = screenToCard(pointer.clientX, pointer.clientY)
-      const dx = point.x - start.x
-      const dy = point.y - start.y
-      placed = resized(origin, corner, dx, dy, item.kind === 'image')
+      placed = placeCard(resizeBox(origin, corner, point.x - start.x, point.y - start.y, item.kind === 'image'), item.kind === 'image')
       onLocal(item.id, placed)
       emitLive(item.id, placed)
     }
@@ -399,25 +502,28 @@ export function CardCanvas({
       window.removeEventListener('pointerup', up)
       emitLive(item.id, placed, true)
       void Promise.resolve(onUpdate(item.id, placed)).finally(() => onInteract(item.id, false))
+      rememberPatch(item.id, before, placed)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
 
   function paint(item: CanvasItem, nextColor: string) {
+    if (nextColor !== item.color) rememberPatch(item.id, { color: item.color }, { color: nextColor })
     onLocal(item.id, { color: nextColor })
     void onUpdate(item.id, { color: nextColor })
     setColor(nextColor)
   }
 
   function resizeFont(item: CanvasItem, fontSize: (typeof FONT_SIZES)[number]) {
+    if (fontSize !== item.fontSize) rememberPatch(item.id, { fontSize: item.fontSize }, { fontSize })
     onLocal(item.id, { fontSize })
     void onUpdate(item.id, { fontSize })
     setTextSize(fontSize)
   }
 
   const ordered = [...items].sort((a, b) => a.z - b.z || a.createdAt - b.createdAt)
-  const handle = Math.max(28, 44 / scale)
+  const handle = Math.max(40, 56 / scale)
 
   const shapeOpen = isShapeKind(tool)
   const inkOpen = tool === 'pen' || tool === 'arrow' || shapeOpen
@@ -464,6 +570,7 @@ export function CardCanvas({
                   scale={scale}
                   pop={appear.has(item.id)}
                   canEdit={canEdit}
+                  drawing={drawing}
                   onDraft={(value) => {
                     draftRef.current = value
                     setDraftText(value)
@@ -476,11 +583,13 @@ export function CardCanvas({
                     if (isShapeKind(item.kind) && isFillMode(item.text || 'both')) return
                     beginEdit(item)
                   }}
-                  onFit={(rect) => {
-                    if (fitted.current.has(item.id)) return
-                    if (item.w !== 320 || item.h !== 240) return
+                  onFit={(natural) => {
+                    if (fitted.current.has(item.id) || natural.w < 1 || natural.h < 1) return
                     fitted.current.add(item.id)
-                    const next = clampToCard(item.x + (item.w - rect.w) / 2, item.y + (item.h - rect.h) / 2, rect.w, rect.h)
+                    if (Date.now() - item.createdAt > 30_000) return
+                    const target = containBox(CARD_W * 0.9, CARD_H * 0.9, natural.w, natural.h)
+                    if (item.w >= target.w * 0.75 && item.h >= target.h * 0.75) return
+                    const next = clampToCard((CARD_W - target.w) / 2, (CARD_H - target.h) / 2, target.w, target.h)
                     onLocal(item.id, next)
                     void onUpdate(item.id, next)
                   }}
@@ -511,14 +620,14 @@ export function CardCanvas({
       {items.length === 0 && !draft && (
         <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center px-6 text-center">
           <div className="max-w-md rounded-2xl bg-white/90 px-5 py-4 shadow-sm">
-            <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '老師暫停咗編輯' : '呢個版面未有內容'}</p>
+            <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '老師已暫停編輯' : '這個版面尚未有內容'}</p>
             <ol className="mt-3 space-y-1 text-left text-lg text-muted">
               {locked && role !== 'teacher' ? (
-                <li>而家只可以睇。</li>
+                <li>現在只可以看。</li>
               ) : (
                 <>
-                  <li>① 撳下面「畫筆／文字／相片／圖形」加內容</li>
-                  <li>② 小組可以一齊改呢一版</li>
+                  <li>① 按下面「畫筆／文字／相片／圖形」加入內容</li>
+                  <li>② 小組可以一起修改這一版</li>
                 </>
               )}
             </ol>
@@ -536,6 +645,24 @@ export function CardCanvas({
             event.preventDefault()
           }}
         >
+          <div className="flex items-center gap-1 overflow-x-auto">
+            <button
+              type="button"
+              disabled={!history.canUndo}
+              onClick={() => void history.undo()}
+              className="pressable grid h-14 min-w-[5.75rem] shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
+            >
+              復原上一筆
+            </button>
+            <button
+              type="button"
+              disabled={!history.canRedo}
+              onClick={() => void history.redo()}
+              className="pressable grid h-14 min-w-16 shrink-0 place-items-center rounded-xl px-3 text-base font-bold hover:bg-white/70 disabled:opacity-40"
+            >
+              重做
+            </button>
+          </div>
           {selectedItem && canEdit ? (
             <EditBar
               item={selectedItem}
@@ -687,43 +814,6 @@ export function CardCanvas({
   )
 }
 
-function resized(
-  origin: { x: number; y: number; w: number; h: number },
-  corner: Corner,
-  dx: number,
-  dy: number,
-  proportional: boolean,
-) {
-  let w = origin.w
-  let h = origin.h
-  if (proportional) {
-    const sx = corner === 'nw' || corner === 'sw' ? -dx : dx
-    const sy = corner === 'nw' || corner === 'ne' ? -dy : dy
-    const scale = Math.abs(sx) >= Math.abs(sy) ? (origin.w + sx) / origin.w : (origin.h + sy) / origin.h
-    w = Math.max(48, origin.w * Math.max(0.2, scale))
-    h = Math.max(36, origin.h * Math.max(0.2, scale))
-  } else if (corner === 'se') {
-    w = Math.max(48, origin.w + dx)
-    h = Math.max(36, origin.h + dy)
-  } else if (corner === 'sw') {
-    w = Math.max(48, origin.w - dx)
-    h = Math.max(36, origin.h + dy)
-  } else if (corner === 'ne') {
-    w = Math.max(48, origin.w + dx)
-    h = Math.max(36, origin.h - dy)
-  } else {
-    w = Math.max(48, origin.w - dx)
-    h = Math.max(36, origin.h - dy)
-  }
-  w = Math.min(CARD_W, w)
-  h = Math.min(CARD_H, h)
-  let x = origin.x
-  let y = origin.y
-  if (corner === 'sw' || corner === 'nw') x = origin.x + origin.w - w
-  if (corner === 'ne' || corner === 'nw') y = origin.y + origin.h - h
-  return clampToCard(x, y, w, h)
-}
-
 function CardNode({
   item,
   minX,
@@ -735,6 +825,7 @@ function CardNode({
   scale,
   pop,
   canEdit,
+  drawing,
   onDraft,
   onCommit,
   onNodeDown,
@@ -752,18 +843,20 @@ function CardNode({
   scale: number
   pop: boolean
   canEdit: boolean
+  drawing: boolean
   onDraft: (value: string) => void
   onCommit: () => void
-  onNodeDown: (event: ReactPointerEvent<HTMLDivElement>, item: CanvasItem) => void
+  onNodeDown: (event: ReactPointerEvent, item: CanvasItem) => void
   onResizeDown: (event: ReactPointerEvent<HTMLButtonElement>, item: CanvasItem, corner: Corner) => void
   onEdit: () => void
-  onFit: (rect: { w: number; h: number }) => void
+  onFit: (natural: { w: number; h: number }) => void
 }) {
   const isText = item.kind === 'text'
   const isImage = item.kind === 'image'
+  const inkItem = item.kind === 'pen' || item.kind === 'arrow'
   const graphic = graphicKind(item.kind)
-  const caption = graphic && !isFillMode(item.text) && item.kind !== 'pen' && item.kind !== 'arrow' ? item.text : ''
-  const fontSize = item.fontSize || 28
+  const caption = graphic && !isFillMode(item.text) && !inkItem ? item.text : ''
+  const fontSize = readingSize(item)
   const corners: Corner[] = ['nw', 'ne', 'sw', 'se']
   const shape = isShapeKind(item.kind)
   return (
@@ -782,17 +875,18 @@ function CardNode({
         border: !graphic && item.kind === 'rect' ? '3px solid #2a2118' : undefined,
         boxShadow: isImage || graphic ? 'none' : `0 ${4 / scale}px ${12 / scale}px rgba(60,40,20,.12)`,
         filter: shape ? `drop-shadow(0 ${4 / scale}px ${12 / scale}px rgba(60,40,20,.12))` : undefined,
-        outline: active ? `${2 / scale}px dashed #1f7a54` : 'none',
+        outline: active && !inkItem ? `${2 / scale}px dashed #1f7a54` : 'none',
         outlineOffset: active ? `${4 / scale}px` : undefined,
+        pointerEvents: inkItem ? 'none' : undefined,
       }}
-      onPointerDown={(event) => onNodeDown(event, item)}
+      onPointerDown={inkItem ? undefined : (event) => onNodeDown(event, item)}
       onDoubleClick={(event) => {
         event.stopPropagation()
         onEdit()
       }}
     >
       {item.kind === 'sticky' && <span className="tape" aria-hidden />}
-      {graphic && <Markup item={item} />}
+      {graphic && <Markup item={item} hit={!drawing && inkItem} onPointerDown={(event) => onNodeDown(event, item)} />}
       {isImage ? (
         <div
           className="polaroid h-full w-full"
@@ -809,16 +903,8 @@ function CardNode({
               draggable={false}
               className="pointer-events-none h-full w-full object-contain"
               onLoad={(event) => {
-                const img = event.currentTarget
-                if (!img.naturalWidth || !img.naturalHeight) return
-                const ratio = img.naturalWidth / img.naturalHeight
-                let w = 420
-                let h = Math.round(w / ratio)
-                if (h > 460) {
-                  h = 460
-                  w = Math.round(h * ratio)
-                }
-                onFit({ w: Math.max(48, w), h: Math.max(36, h) })
+                const image = event.currentTarget
+                onFit({ w: image.naturalWidth, h: image.naturalHeight })
               }}
             />
           ) : (
@@ -842,7 +928,9 @@ function CardNode({
         />
       ) : graphic ? (
         caption ? (
-          <div className="pointer-events-none grid h-full w-full place-items-center p-3 text-center text-lg font-semibold">{caption}</div>
+          <div className="pointer-events-none grid h-full w-full place-items-center p-3 text-center font-semibold" style={{ fontSize: 32 }}>
+            {caption}
+          </div>
         ) : null
       ) : (
         <div
@@ -850,9 +938,9 @@ function CardNode({
             'h-full w-full overflow-hidden whitespace-pre-wrap break-words p-4 leading-snug',
             (item.kind === 'rect' || item.kind === 'ellipse') && 'grid place-items-center text-center',
           )}
-          style={{ fontSize: isText ? fontSize : 22, fontWeight: isText ? 600 : 500 }}
+          style={{ fontSize, fontWeight: isText ? 600 : 500 }}
         >
-          {item.text ? <RichNote text={item.text} /> : active && canEdit ? '撳兩下打字' : ''}
+          {item.text ? <RichNote text={item.text} /> : active && canEdit ? '按兩下打字' : ''}
         </div>
       )}
       {active && canEdit &&
@@ -870,13 +958,14 @@ function CardNode({
               right: corner === 'ne' || corner === 'se' ? 0 : undefined,
               top: corner === 'nw' || corner === 'ne' ? 0 : undefined,
               bottom: corner === 'sw' || corner === 'se' ? 0 : undefined,
-              transform: corner === 'nw' ? 'translate(-35%, -35%)' : corner === 'ne' ? 'translate(35%, -35%)' : corner === 'sw' ? 'translate(-35%, 35%)' : 'translate(35%, 35%)',
+              transform: corner === 'nw' ? 'translate(-40%, -40%)' : corner === 'ne' ? 'translate(40%, -40%)' : corner === 'sw' ? 'translate(-40%, 40%)' : 'translate(40%, 40%)',
+              pointerEvents: 'auto',
             }}
             onPointerDown={(event) => onResizeDown(event, item, corner)}
           >
             <span
               className="rounded-full border-leaf bg-white"
-              style={{ width: 14 / scale, height: 14 / scale, borderWidth: Math.max(2, 2 / scale) }}
+              style={{ width: 22 / scale, height: 22 / scale, borderWidth: Math.max(3, 3 / scale) }}
             />
           </button>
         ))}
@@ -906,7 +995,7 @@ function EditBar({
   const colors = item.kind === 'text' ? TEXT_COLORS : item.kind === 'sticky' ? NOTE_COLORS : item.kind === 'image' ? [] : DRAW_COLORS
   return (
     <>
-      <ToolButton label="揀" pressed={false} onClick={onBack}>
+      <ToolButton label="選擇" pressed={false} onClick={onBack}>
         <MousePointer2 className="h-6 w-6" />
       </ToolButton>
       {colors.length > 0 && <span className="mx-1 h-10 w-px shrink-0 bg-line" />}
@@ -944,7 +1033,7 @@ function EditBar({
         </button>
       )}
       <span className="mx-1 h-10 w-px shrink-0 bg-line" />
-      <ToolButton label="刪" tone="#b91c1c" disabled={!canDelete} onClick={onDelete}>
+      <ToolButton label="刪除" tone="#b91c1c" disabled={!canDelete} onClick={onDelete}>
         <Trash2 className="h-6 w-6" />
       </ToolButton>
     </>

@@ -42,7 +42,7 @@ function TypePicker({ value, onChange }: { value: BoardType; onChange: (value: B
           {option.hint && <span className="mt-1 block text-base font-medium text-muted">{option.hint}</span>}
         </button>
       ))}
-      {value === 'sandbox' && <p className="text-base text-muted">老師先開幾個版面。學生開同一條連結，揀版面，小組一齊貼成果。</p>}
+      {value === 'sandbox' && <p className="text-base text-muted">老師先開啟幾個版面。學生打開同一條連結，選擇版面，小組一起貼上成果。</p>}
     </div>
   )
 }
@@ -117,7 +117,7 @@ export function CreateBoardDialog({
               board={created}
               password={password || undefined}
               title="分享連結"
-              description="學生打開呢條連結就可以入呢塊板。掃碼入板同掃碼交作品係另外兩個按鈕。"
+              description="學生打開這條連結就可以進入這塊板。掃碼入板和掃碼交作品是另外兩個按鈕。"
             />
             <Button
               type="button"
@@ -133,15 +133,15 @@ export function CreateBoardDialog({
           <>
             <DialogHeader>
               <DialogTitle>新建壁報</DialogTitle>
-              <DialogDescription>加喺這個課室。學生用同一條課室連結就睇到。</DialogDescription>
+              <DialogDescription>加在這個課室。學生用同一條課室連結就能看到。</DialogDescription>
             </DialogHeader>
             <form className="space-y-5" onSubmit={(event) => void submit(event)}>
               <div className="space-y-2">
-                <Label htmlFor="board-title">① 叫咩名？</Label>
+                <Label htmlFor="board-title">① 叫什麼名字？</Label>
                 <Input id="board-title" value={title} maxLength={40} placeholder="例如：校園植物觀察" onChange={(event) => setTitle(event.target.value)} />
               </div>
               <div className="space-y-2">
-                <p className="text-base font-semibold">② 邊種板？</p>
+                <p className="text-base font-semibold">② 哪一種板？</p>
                 <TypePicker value={type} onChange={setType} />
               </div>
               <div>
@@ -151,7 +151,7 @@ export function CreateBoardDialog({
                   aria-expanded={advanced}
                   onClick={() => setAdvanced((value) => !value)}
                 >
-                  ③ {advanced ? '收起進階' : '進階（可摺埋）'}
+                  ③ {advanced ? '收起進階' : '進階（可收起）'}
                 </button>
                 {advanced && (
                   <div className="space-y-4">
@@ -286,7 +286,7 @@ export function BoardSettingsDialog({
             board={{ id: board.id, title, groupLabel: groupLabel.trim() || null, type: board.type }}
             password={revealed}
             title="新密碼已設定"
-            description="而家抄低密碼。關閉後唔會再顯示。"
+            description="請現在抄下密碼。關閉後不會再顯示。"
           />
         ) : confirming ? (
           <>
@@ -309,7 +309,7 @@ export function BoardSettingsDialog({
             <DialogHeader>
               <DialogTitle>壁報設定</DialogTitle>
               <DialogDescription>
-                {board.type === 'sandbox' ? '可以改名稱、組別、密碼，暫停編輯，或者開放學生開新版面。' : '可以改名稱、組別、密碼，或鎖定後只讓學生觀看。'}
+                {board.type === 'sandbox' ? '可以更改名稱、組別、密碼，暫停編輯，或者開放學生新增版面。' : '可以更改名稱、組別、密碼，或鎖定後只讓學生觀看。'}
               </DialogDescription>
             </DialogHeader>
             <form className="space-y-4" onSubmit={(event) => void save(event)}>
@@ -344,7 +344,7 @@ export function BoardSettingsDialog({
                 <div>
                   <div className="text-base font-semibold">{board.type === 'sandbox' ? '暫停編輯' : '鎖定壁報'}</div>
                   <p className="text-base text-muted">
-                    {board.type === 'sandbox' ? '學生只可以睇，未可以改版面入面嘅內容。' : '鎖定後學生只能觀看，不能新增或移動。'}
+                    {board.type === 'sandbox' ? '學生只可以看，還不能修改版面裡面的內容。' : '鎖定後學生只能觀看，不能新增或移動。'}
                   </p>
                 </div>
                 <Switch checked={locked} onCheckedChange={setLocked} aria-label={board.type === 'sandbox' ? '暫停編輯' : '鎖定壁報'} />
@@ -352,10 +352,10 @@ export function BoardSettingsDialog({
               {board.type === 'sandbox' && (
                 <div className="flex min-h-[52px] items-center justify-between gap-4 rounded-2xl border border-line px-3 py-3">
                   <div>
-                    <div className="text-base font-semibold">學生可開新版面</div>
-                    <p className="text-base text-muted">預設關。開咗之後，學生先見到「＋ 新版面」，亦可以改名同刪除自己開嘅版面。</p>
+                    <div className="text-base font-semibold">學生可新增版面</div>
+                    <p className="text-base text-muted">預設關閉。開啟之後，學生才會看到「＋ 新版面」，也可以改名和刪除自己建立的版面。</p>
                   </div>
-                  <Switch checked={studentPages} onCheckedChange={setStudentPages} aria-label="學生可開新版面" />
+                  <Switch checked={studentPages} onCheckedChange={setStudentPages} aria-label="學生可新增版面" />
                 </div>
               )}
               <Alert message={error} />
@@ -394,7 +394,7 @@ export function ShareDialog({
           board={board}
           password={password}
           title="分享連結"
-          description="學生打開呢條連結就可以入呢塊板。掃碼入板同掃碼交作品係另外兩個按鈕。"
+          description="學生打開這條連結就可以進入這塊板。掃碼入板和掃碼交作品是另外兩個按鈕。"
         />
       </DialogContent>
     </Dialog>
@@ -474,7 +474,7 @@ function ShareBody({
           </>
         ) : (
           <p className="text-base text-muted">
-            {board.hasPassword ? '學生密碼已設定。呢度唔會再顯示，忘記可以喺設定重設。' : '未設學生密碼，打開連結就可以入。'}
+            {board.hasPassword ? '學生密碼已設定。這裡不會再顯示，忘記可以在設定重設。' : '未設學生密碼，打開連結即可進入。'}
           </p>
         )}
         <button

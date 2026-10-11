@@ -5,6 +5,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import multer from 'multer'
 import { isFontSize, isHexColor, isNoteColor, isStrokeWidth, isTextColor } from '../shared/colors'
+import { containBox, imagePixelSize } from '../shared/geometry'
 import { isItemKind, isShapeKind } from '../shared/markup'
 import { extractYouTubeId, isAllowedImageUrl } from '../shared/media'
 import type { BoardType, CanvasItem, Post, PostKind, WallLayout } from '../shared/types'
@@ -113,6 +114,42 @@ function writable(boardId: string, role: 'teacher' | 'student') {
 function clamp(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min
   return Math.min(max, Math.max(min, value))
+}
+
+function readViewFrame(body: unknown) {
+  if (!body || typeof body !== 'object') return null
+  const view = (body as { view?: unknown }).view
+  if (!view || typeof view !== 'object') return null
+  const frame = view as { x?: unknown; y?: unknown; w?: unknown; h?: unknown }
+  const x = Number(frame.x)
+  const y = Number(frame.y)
+  const w = Number(frame.w)
+  const h = Number(frame.h)
+  if (![x, y, w, h].every((value) => Number.isFinite(value))) return null
+  if (w < 120 || h < 120 || w > 8000 || h > 6000) return null
+  return { x, y, w, h }
+}
+
+function placedPhotoBox(
+  boardType: string,
+  buffer: Buffer,
+  kind: 'image' | 'pdf',
+  index: number,
+  view: { x: number; y: number; w: number; h: number } | null,
+) {
+  if (kind === 'pdf') {
+    return { x: (view?.x ?? 72) + index * 24, y: (view?.y ?? 72) + index * 24, w: 480, h: 300 }
+  }
+  const sandbox = boardType === 'sandbox'
+  const boxW = view ? view.w * 0.9 : sandbox ? 1080 : 1100
+  const boxH = view ? view.h * 0.9 : sandbox ? 680 : 740
+  const pixels = imagePixelSize(buffer)
+  const size = pixels ? containBox(boxW, boxH, pixels.width, pixels.height) : { w: Math.min(boxW, 960), h: Math.min(boxH, 640) }
+  const w = Math.min(3600, size.w)
+  const h = Math.min(2400, size.h)
+  const originX = view ? view.x + (view.w - w) / 2 : sandbox ? (1200 - w) / 2 : 64
+  const originY = view ? view.y + (view.h - h) / 2 : sandbox ? (760 - h) / 2 : 64
+  return { x: originX + index * 28, y: originY + index * 28, w, h }
 }
 
 function sniffImage(buffer: Buffer) {
@@ -399,7 +436,7 @@ export function createApi() {
     if (!page) throw new HttpError(404, '找不到這個版面')
     const clientId = cleanClientId(req.body?.clientId)
     if (access.role !== 'teacher' && (Number(row.allow_student_pages) !== 1 || page.clientId !== clientId)) {
-      throw new HttpError(403, '只能改自己開的版面')
+      throw new HttpError(403, '只能修改自己建立的版面')
     }
     const title = cleanText(req.body?.title, 40)
     if (!title) throw new HttpError(400, '請填寫版面名稱')
@@ -425,7 +462,7 @@ export function createApi() {
     if (!page) throw new HttpError(404, '找不到這個版面')
     const clientId = cleanClientId(req.query.clientId)
     if (access.role !== 'teacher' && (Number(row.allow_student_pages) !== 1 || page.clientId !== clientId)) {
-      throw new HttpError(403, '只能刪除自己開的版面')
+      throw new HttpError(403, '只能刪除自己建立的版面')
     }
     deletePage(boardId, page.id)
     broadcast(boardId, { type: 'page.deleted', id: page.id })
@@ -543,7 +580,7 @@ export function createApi() {
     if (!clientId) throw new HttpError(400, '請先設定暱稱')
     let pageId: string | null = null
     if (row.type === 'sandbox') {
-      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師暫停咗編輯')
+      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師已暫停編輯')
       pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : ''
       const page = pageId ? getPage(boardId, pageId) : undefined
       if (!page) throw new HttpError(404, '找不到這個版面')
@@ -580,7 +617,7 @@ export function createApi() {
     const requestedSize = Number(req.body?.fontSize)
     const fontSize = kind === 'pen' || kind === 'arrow' || isShapeKind(kind)
       ? isStrokeWidth(requestedSize) ? requestedSize : 8
-      : isFontSize(requestedSize) ? requestedSize : 28
+      : isFontSize(requestedSize) ? requestedSize : 32
     const now = Date.now()
     const item: CanvasItem = {
       id,
@@ -592,8 +629,8 @@ export function createApi() {
       text,
       x: clamp(Number(req.body?.x), -8000, 16000),
       y: clamp(Number(req.body?.y), -8000, 16000),
-      w: clamp(Number(req.body?.w), 48, 1200),
-      h: clamp(Number(req.body?.h), 36, 1000),
+      w: clamp(Number(req.body?.w), 8, 4000),
+      h: clamp(Number(req.body?.h), 8, 3000),
       color,
       fontSize,
       z: pageId ? nextPageZ(pageId) : nextZ('canvas_items', boardId),
@@ -613,7 +650,7 @@ export function createApi() {
     const item = getItem(boardId, req.params.itemId)
     if (!item) throw new HttpError(404, '找不到物件')
     if (row.type === 'sandbox') {
-      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師暫停咗編輯')
+      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師已暫停編輯')
       const page = item.pageId ? getPage(boardId, item.pageId) : undefined
       if (!page) throw new HttpError(404, '找不到這個版面')
     } else {
@@ -645,8 +682,8 @@ export function createApi() {
     }
     if (typeof body.x === 'number') next.x = clamp(body.x, -8000, 16000)
     if (typeof body.y === 'number') next.y = clamp(body.y, -8000, 16000)
-    if (typeof body.w === 'number') next.w = clamp(body.w, 48, 1200)
-    if (typeof body.h === 'number') next.h = clamp(body.h, 36, 1000)
+    if (typeof body.w === 'number') next.w = clamp(body.w, 8, 4000)
+    if (typeof body.h === 'number') next.h = clamp(body.h, 8, 3000)
     if (typeof body.z === 'number') next.z = clamp(Math.round(body.z), 1, 100000)
     const saved = saveItem(next)
     broadcast(boardId, { type: 'item.updated', item: saved })
@@ -662,7 +699,7 @@ export function createApi() {
     if (!item) throw new HttpError(404, '找不到物件')
     const clientId = cleanClientId(req.query.clientId)
     if (row.type === 'sandbox') {
-      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師暫停咗編輯')
+      if (Number(row.locked) === 1 && access.role !== 'teacher') throw new HttpError(403, '老師已暫停編輯')
       if (access.role !== 'teacher' && item.clientId !== clientId) throw new HttpError(403, '只能刪除自己的物件')
     } else {
       writable(boardId, access.role)
@@ -685,7 +722,7 @@ export function createApi() {
         const row = getBoardRow(boardId)
         if (!row) throw new HttpError(404, '找不到壁報')
         if (Number(row.locked) === 1 && access.role !== 'teacher') {
-          throw new HttpError(403, row.type === 'sandbox' ? '老師暫停咗編輯' : '壁報已鎖定')
+          throw new HttpError(403, row.type === 'sandbox' ? '老師已暫停編輯' : '壁報已鎖定')
         }
         const file = req.file
         if (!file || file.size < 32) throw new HttpError(400, '請選擇圖片')
@@ -752,12 +789,12 @@ export function createApi() {
     const row = ownedBoard(teacher.wid, req.params.boardId)
     const rawIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : []
     const ids = rawIds.filter((id): id is string => typeof id === 'string').slice(0, 24)
-    if (ids.length === 0) throw new HttpError(400, '請先揀檔案')
+    if (ids.length === 0) throw new HttpError(400, '請先選擇檔案')
     const pageId = typeof req.body?.pageId === 'string' ? req.body.pageId : ''
     let page: ReturnType<typeof getPage> | undefined
     if (row.type === 'sandbox') {
       page = pageId ? getPage(row.id, pageId) : undefined
-      if (!page) throw new HttpError(400, '請先揀一個版面')
+      if (!page) throw new HttpError(400, '請先選擇一個版面')
       if (countPageItems(page.id) + ids.length > 400) throw new HttpError(400, '這個版面的物件已達上限')
     } else if (row.type === 'canvas') {
       if (countItems(row.id) + ids.length > 400) throw new HttpError(400, '畫布物件已達上限')
@@ -805,6 +842,7 @@ export function createApi() {
         broadcast(row.id, { type: 'post.created', post: saved })
         return
       }
+      const placed = placedPhotoBox(row.type, buffer, sniffed.kind, index, readViewFrame(req.body))
       const item: CanvasItem = {
         id: makeId(12),
         boardId: row.id,
@@ -813,12 +851,12 @@ export function createApi() {
         clientId: 'teacher-drop',
         kind: sniffed.kind === 'pdf' ? 'sticky' : 'image',
         text: sniffed.kind === 'pdf' ? `PDF：${found.file.originalName}\n${url}` : url,
-        x: 72 + (index % 3) * 36,
-        y: 72 + index * 28,
-        w: sniffed.kind === 'pdf' ? 280 : 360,
-        h: sniffed.kind === 'pdf' ? 180 : 260,
+        x: placed.x,
+        y: placed.y,
+        w: placed.w,
+        h: placed.h,
         color: sniffed.kind === 'pdf' ? '#ffe9a0' : '#fffdf8',
-        fontSize: sniffed.kind === 'pdf' ? 18 : 28,
+        fontSize: 32,
         z: row.type === 'sandbox' ? nextPageZ(page!.id) : nextZ('canvas_items', row.id),
         createdAt: now,
         updatedAt: now,
@@ -849,7 +887,7 @@ export function createApi() {
       try {
         const row = getBoardByDropToken(req.params.token)
         if (!row) throw new HttpError(404, '找不到這個上載頁')
-        if (dropsPaused(row)) throw new HttpError(403, '老師暫停咗上載')
+        if (dropsPaused(row)) throw new HttpError(403, '老師已暫停上載')
         if (row.password_hash) {
           const password = typeof req.body?.password === 'string' ? req.body.password : ''
           if (!verifySecret(password, row.password_hash)) {

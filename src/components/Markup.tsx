@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useId, type PointerEvent as ReactPointerEvent } from 'react'
 import type { CanvasItem } from '../../shared/types'
 import { fillModeOf, isShapeKind, parseInk, type FillMode, type StrokeStyle } from '../../shared/markup'
 
@@ -10,15 +10,27 @@ const PATHS: Record<string, string> = {
   bubble: 'M10 16 H76 Q90 16 90 30 V54 Q90 68 76 68 H42 L26 88 L30 68 H24 Q10 68 10 54 V30 Q10 16 24 16 Z',
 }
 
-export function Markup({ item }: { item: CanvasItem }) {
+export function Markup({
+  item,
+  hit = false,
+  onPointerDown,
+}: {
+  item: CanvasItem
+  hit?: boolean
+  onPointerDown?: (event: ReactPointerEvent<SVGElement>) => void
+}) {
   const width = Math.max(1, item.w)
   const height = Math.max(1, item.h)
   const stroke = item.fontSize === 4 || item.fontSize === 14 ? item.fontSize : 8
   if (item.kind === 'pen' || item.kind === 'arrow') {
     const ink = parseInk(item.text)
     return (
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full overflow-visible" aria-hidden>
-        {item.kind === 'arrow' ? <ArrowMark width={width} height={height} color={item.color} stroke={stroke} style={ink.style} points={ink.points} /> : <PenMark color={item.color} stroke={stroke} style={ink.style} points={ink.points} />}
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full overflow-visible" style={{ pointerEvents: 'none' }} aria-hidden>
+        {item.kind === 'arrow' ? (
+          <ArrowMark width={width} height={height} color={item.color} stroke={stroke} style={ink.style} points={ink.points} hit={hit} onPointerDown={onPointerDown} />
+        ) : (
+          <PenMark color={item.color} stroke={stroke} style={ink.style} points={ink.points} hit={hit} onPointerDown={onPointerDown} />
+        )}
       </svg>
     )
   }
@@ -37,10 +49,40 @@ function dash(style: StrokeStyle, stroke: number) {
   return undefined
 }
 
-function PenMark({ color, stroke, style, points }: { color: string; stroke: number; style: StrokeStyle; points: { x: number; y: number }[] }) {
+function PenMark({
+  color,
+  stroke,
+  style,
+  points,
+  hit,
+  onPointerDown,
+}: {
+  color: string
+  stroke: number
+  style: StrokeStyle
+  points: { x: number; y: number }[]
+  hit?: boolean
+  onPointerDown?: (event: ReactPointerEvent<SVGElement>) => void
+}) {
   if (points.length === 0) return null
   const d = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
-  return <path d={d} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dash(style, stroke)} />
+  return (
+    <>
+      {hit && (
+        <path
+          d={d}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={Math.max(28, stroke + 18)}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ pointerEvents: 'stroke' }}
+          onPointerDown={onPointerDown}
+        />
+      )}
+      <path d={d} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" strokeDasharray={dash(style, stroke)} style={{ pointerEvents: 'none' }} />
+    </>
+  )
 }
 
 function ArrowMark({
@@ -50,6 +92,8 @@ function ArrowMark({
   stroke,
   style,
   points,
+  hit,
+  onPointerDown,
 }: {
   width: number
   height: number
@@ -57,6 +101,8 @@ function ArrowMark({
   stroke: number
   style: StrokeStyle
   points: { x: number; y: number }[]
+  hit?: boolean
+  onPointerDown?: (event: ReactPointerEvent<SVGElement>) => void
 }) {
   const reactId = useId().replace(/:/g, '')
   const start = points[0] ?? { x: stroke + 4, y: height - stroke - 4 }
@@ -69,7 +115,20 @@ function ArrowMark({
           <path d="M0 0 L7 3 L0 6 Z" fill={color} />
         </marker>
       </defs>
-      <line x1={start.x} y1={start.y} x2={end.x} y2={end.y} stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={dash(style, stroke)} markerEnd={`url(#${id})`} />
+      {hit && (
+        <line
+          x1={start.x}
+          y1={start.y}
+          x2={end.x}
+          y2={end.y}
+          stroke="transparent"
+          strokeWidth={Math.max(28, stroke + 18)}
+          strokeLinecap="round"
+          style={{ pointerEvents: 'stroke' }}
+          onPointerDown={onPointerDown}
+        />
+      )}
+      <line x1={start.x} y1={start.y} x2={end.x} y2={end.y} stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={dash(style, stroke)} markerEnd={`url(#${id})`} style={{ pointerEvents: 'none' }} />
     </>
   )
 }

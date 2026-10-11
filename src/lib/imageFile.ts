@@ -44,7 +44,7 @@ async function decodeImage(file: File) {
     })
     return await createImageBitmap(image)
   } catch {
-    throw new Error('讀唔到這張相片。iPhone 請在相簿選「最相容」格式，或改選 JPG。')
+    throw new Error('無法讀取這張相片。iPhone 請在相簿選「最相容」格式，或改選 JPG。')
   } finally {
     URL.revokeObjectURL(url)
   }

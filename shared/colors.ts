@@ -27,16 +27,16 @@ export function isTextColor(value: string) {
   return (TEXT_COLORS as readonly string[]).includes(value)
 }
 
-export const FONT_SIZES = [18, 28, 40] as const
+export const FONT_SIZES = [18, 32, 40] as const
 
 export const FONT_SIZE_LABELS: Record<(typeof FONT_SIZES)[number], string> = {
-  18: '細',
-  28: '中',
+  18: '小',
+  32: '中',
   40: '大',
 }
 
 export function isFontSize(value: number) {
-  return value === 18 || value === 28 || value === 40
+  return value === 18 || value === 28 || value === 32 || value === 40
 }
 
 export const DRAW_COLORS = ['#1f1a14', '#c4492c', '#e11d48', '#f59e0b', '#facc15', '#1f7a54', '#1d4e89', '#2563eb', '#6b4c9a', '#ffffff', '#ffe9a0', '#ffd0dc'] as const
@@ -59,7 +59,7 @@ export const DRAW_COLOR_LABELS: Record<(typeof DRAW_COLORS)[number], string> = {
 export const STROKE_WIDTHS = [4, 8, 14] as const
 
 export const STROKE_WIDTH_LABELS: Record<(typeof STROKE_WIDTHS)[number], string> = {
-  4: '幼',
+  4: '細',
   8: '中',
   14: '粗',
 }
