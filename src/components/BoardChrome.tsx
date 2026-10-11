@@ -1,11 +1,35 @@
-import { FolderUp, QrCode } from 'lucide-react'
+import { BookOpen, FolderUp, Palette, Pin, QrCode } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
-import type { Board, Person, Role, WallLayout } from '../../shared/types'
+import type { Board, BoardType, Person, Role, WallLayout } from '../../shared/types'
 import { MenuItem, PopoverMenu } from '@/components/PopoverMenu'
 import { Button } from '@/components/ui/button'
 import { classroomUrl, copyText } from '@/lib/share'
 import { cn } from '@/lib/utils'
+
+const BOARD_MARK: Record<BoardType, { Icon: typeof Pin }> = {
+  sandbox: { Icon: BookOpen },
+  canvas: { Icon: Palette },
+  wall: { Icon: Pin },
+}
+
+const AVATAR_COLORS = ['#e07b24', '#1f7a54', '#1d4e89', '#6b4c9a', '#d6457a', '#c99a06', '#c4492c']
+
+function avatarColor(name: string) {
+  let hash = 0
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length]
+}
+
+function avatarInk(color: string) {
+  return color === '#c99a06' || color === '#e07b24' ? '#1f1a14' : '#ffffff'
+}
+
+function nameInitial(name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) return '？'
+  return Array.from(trimmed)[0] ?? '？'
+}
 
 export function BoardChrome({
   board,
@@ -58,6 +82,9 @@ export function BoardChrome({
   }, [openPeople])
 
   const statusLabel = status === 'live' ? '已連線' : status === 'connecting' ? '重新連線中' : '未連線'
+  const mark = BOARD_MARK[board.type]
+  const shownPeople = people.slice(0, 5)
+  const extraPeople = people.length - shownPeople.length
 
   return (
     <>
@@ -77,28 +104,62 @@ export function BoardChrome({
                 {board.type === 'wall' ? '壁報板' : board.type === 'sandbox' ? '共同畫布' : '畫布'}
               </p>
             )}
-            <h1 className="truncate font-serif text-2xl font-bold sm:text-3xl">{board.title}</h1>
+            <h1 className="flex min-w-0 items-center gap-2 font-serif text-3xl font-bold leading-tight sm:text-4xl">
+              <mark.Icon className="h-7 w-7 shrink-0 text-stamp sm:h-8 sm:w-8" aria-hidden />
+              <span className="truncate">{board.title}</span>
+            </h1>
             <div className="flex flex-wrap items-center gap-x-2 text-sm text-muted">
               {board.groupLabel && <span>{board.groupLabel}</span>}
               <span className={cn(status === 'live' ? 'text-leaf' : 'text-warn')}>{statusLabel}</span>
-              <div className="relative" ref={peopleRef}>
-                <button type="button" className="inline-flex min-h-[52px] items-center underline-offset-2 hover:underline" onClick={() => setOpenPeople((value) => !value)}>
-                  {people.length} 人
-                </button>
-                {openPeople && (
-                  <ul className="absolute left-0 z-50 mt-2 w-48 rounded-2xl border border-line bg-paper p-2 text-base text-ink shadow-lg">
-                    {people.length === 0 && <li className="px-2 py-2 text-muted">暫時沒有人</li>}
-                    {people.map((person) => (
-                      <li key={person.id} className="truncate px-2 py-2">
-                        {person.name}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <div className="relative" ref={peopleRef}>
+              <button
+                type="button"
+                className="inline-flex min-h-[52px] items-center px-1"
+                aria-expanded={openPeople}
+                aria-label={`${people.length} 人在線`}
+                onClick={() => setOpenPeople((value) => !value)}
+              >
+                {people.length === 0 ? (
+                  <span className="text-sm font-semibold text-muted">0 人</span>
+                ) : (
+                  <span className="flex items-center">
+                    {shownPeople.map((person, index) => {
+                      const color = avatarColor(person.name)
+                      return (
+                        <span
+                          key={person.id}
+                          className="grid h-8 w-8 place-items-center rounded-full border-2 border-white text-sm font-bold shadow-sm"
+                          style={{ background: color, color: avatarInk(color), marginLeft: index === 0 ? 0 : -8, zIndex: shownPeople.length - index }}
+                        >
+                          {nameInitial(person.name)}
+                        </span>
+                      )
+                    })}
+                    {extraPeople > 0 && (
+                      <span
+                        className="grid h-8 w-8 place-items-center rounded-full border-2 border-white bg-ink text-xs font-bold text-white shadow-sm"
+                        style={{ marginLeft: -8 }}
+                      >
+                        +{extraPeople}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </button>
+              {openPeople && (
+                <ul className="absolute right-0 z-50 mt-2 w-48 rounded-2xl border border-line bg-paper p-2 text-base text-ink shadow-lg">
+                  {people.length === 0 && <li className="px-2 py-2 text-muted">暫時沒有人</li>}
+                  {people.map((person) => (
+                    <li key={person.id} className="truncate px-2 py-2">
+                      {person.name}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             {onAdd && (
               <Button type="button" size="lg" className="hidden md:inline-flex" onClick={onAdd}>
                 ＋ 新增貼文

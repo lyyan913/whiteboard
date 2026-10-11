@@ -7,21 +7,24 @@ import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
 import { makeId } from '../../shared/text'
 import { Markup } from '@/components/Markup'
 import { RichNote } from '@/components/RichNote'
-import { cn } from '@/lib/utils'
+import { useAppearIds } from '@/lib/useAppearIds'
+import { cn, polaroidTilt } from '@/lib/utils'
 
 type Tool = 'select' | ItemKind
 
-const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2 }[] = [
-  { id: 'select', label: '揀', icon: MousePointer2 },
-  { id: 'pen', label: '畫筆', icon: Pencil },
-  { id: 'text', label: '文字', icon: Type },
-  { id: 'sticky', label: '便利貼', icon: StickyNote },
-  { id: 'rect', label: '方形', icon: Square },
-  { id: 'ellipse', label: '圓形', icon: Circle },
-  { id: 'star', label: '星', icon: Star },
-  { id: 'heart', label: '心', icon: Heart },
-  { id: 'arrow', label: '箭咀', icon: ArrowUpRight },
+const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2; tone: string }[] = [
+  { id: 'select', label: '揀', icon: MousePointer2, tone: '#1f1a14' },
+  { id: 'pen', label: '畫筆', icon: Pencil, tone: '#c4492c' },
+  { id: 'text', label: '文字', icon: Type, tone: '#1d4e89' },
+  { id: 'sticky', label: '便利貼', icon: StickyNote, tone: '#c99a06' },
+  { id: 'rect', label: '方形', icon: Square, tone: '#e07b24' },
+  { id: 'ellipse', label: '圓形', icon: Circle, tone: '#e07b24' },
+  { id: 'star', label: '星', icon: Star, tone: '#d6457a' },
+  { id: 'heart', label: '心', icon: Heart, tone: '#d6457a' },
+  { id: 'arrow', label: '箭咀', icon: ArrowUpRight, tone: '#6b4c9a' },
 ]
+
+const SOFT_SHADOW = '0 4px 12px rgba(60,40,20,.12)'
 
 function defaultSize(kind: ItemKind) {
   if (kind === 'text') return { w: 240, h: 88 }
@@ -60,6 +63,7 @@ export function CanvasView({
   onInteract: (id: string, active: boolean) => void
 }) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const dotsRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
   const zoomRef = useRef<HTMLSpanElement>(null)
   const camera = useRef({ x: 72, y: 56, zoom: 1 })
@@ -74,6 +78,7 @@ export function CanvasView({
   const [draft, setDraft] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [hint, setHint] = useState(false)
   const canEdit = !locked || role === 'teacher'
+  const appear = useAppearIds(items.map((item) => item.id).join('\u0001'))
 
   useEffect(() => {
     let seen = false
@@ -96,9 +101,9 @@ export function CanvasView({
     if (worldRef.current) {
       worldRef.current.style.transform = `translate(${current.x}px, ${current.y}px) scale(${current.zoom})`
     }
-    if (viewportRef.current) {
-      viewportRef.current.style.backgroundPosition = `${current.x}px ${current.y}px`
-      viewportRef.current.style.backgroundSize = `${28 * current.zoom}px ${28 * current.zoom}px`
+    if (dotsRef.current) {
+      dotsRef.current.style.backgroundPosition = `${current.x}px ${current.y}px`
+      dotsRef.current.style.backgroundSize = `${24 * current.zoom}px ${24 * current.zoom}px`
     }
     if (zoomRef.current) zoomRef.current.textContent = `${Math.round(current.zoom * 100)}%`
   }
@@ -374,13 +379,14 @@ export function CanvasView({
   const ordered = [...items].sort((a, b) => a.z - b.z || a.createdAt - b.createdAt)
 
   return (
-    <div className="relative min-h-0 flex-1">
+    <div className="relative min-h-0 flex-1 bg-cream">
       {hint && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-2xl bg-ink px-4 py-3 text-base font-semibold text-white shadow">
           拖動貼文可以擺位
         </div>
       )}
-      <div ref={viewportRef} className="canvas-grid absolute inset-0 overflow-hidden" onPointerDown={onBackgroundDown}>
+      <div ref={viewportRef} className="canvas-sheet absolute inset-2 overflow-hidden sm:inset-3" onPointerDown={onBackgroundDown}>
+        <div ref={dotsRef} className="canvas-dots pointer-events-none absolute inset-0" />
         <div ref={worldRef} className="absolute left-0 top-0 origin-top-left">
           {ordered.map((item) => {
             const active = selected === item.id
@@ -388,22 +394,28 @@ export function CanvasView({
             const isImage = item.kind === 'image'
             const graphic = item.kind === 'pen' || item.kind === 'arrow' || isShapeKind(item.kind)
             const caption = graphic && !isFillMode(item.text) && item.kind !== 'pen' && item.kind !== 'arrow' ? item.text : ''
+            const shape = isShapeKind(item.kind)
             return (
               <div
                 key={item.id}
                 data-node
-                className={cn('absolute touch-none', active && 'outline outline-2 outline-offset-2 outline-leaf')}
+                className={cn(
+                  'absolute touch-none',
+                  active && 'outline-2 outline-dashed outline-offset-4 outline-leaf',
+                  appear.has(item.id) && 'item-pop',
+                )}
                 style={{
                   left: item.x,
                   top: item.y,
                   width: item.w,
                   height: item.h,
                   zIndex: item.z,
-                  background: isText || isImage || graphic ? 'transparent' : item.color,
+                  background: isText ? '#fffdf8' : isImage || graphic ? 'transparent' : item.color,
                   color: isText ? item.color : '#2a2118',
-                  borderRadius: graphic ? 0 : item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 4 : 14,
+                  borderRadius: isImage || graphic ? 0 : item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 4 : 14,
                   border: !graphic && item.kind === 'rect' ? '2px solid #2a2118' : undefined,
-                  boxShadow: isText || isImage || graphic ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
+                  boxShadow: isImage || graphic ? 'none' : SOFT_SHADOW,
+                  filter: shape ? 'drop-shadow(0 4px 12px rgba(60,40,20,.12))' : undefined,
                 }}
                 onPointerDown={(event) => onNodeDown(event, item)}
                 onDoubleClick={(event) => {
@@ -416,11 +428,13 @@ export function CanvasView({
                 {item.kind === 'sticky' && <span className="tape" aria-hidden />}
                 {graphic && <Markup item={item} />}
                 {isImage ? (
-                  isAllowedImageUrl(item.text) ? (
-                    <img src={item.text} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />
-                  ) : (
-                    <div className="grid h-full place-items-center text-sm text-muted">相片</div>
-                  )
+                  <div className="polaroid h-full w-full" style={{ transform: active ? 'rotate(0deg)' : `rotate(${polaroidTilt(item.id)}deg)` }}>
+                    {isAllowedImageUrl(item.text) ? (
+                      <img src={item.text} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />
+                    ) : (
+                      <div className="grid h-full place-items-center text-sm text-muted">相片</div>
+                    )}
+                  </div>
                 ) : editing === item.id ? (
                   <textarea
                     autoFocus
@@ -455,7 +469,7 @@ export function CanvasView({
                     className="absolute -bottom-3 -right-3 grid h-11 w-11 place-items-center"
                     onPointerDown={(event) => onResizeDown(event, item)}
                   >
-                    <span className="h-3.5 w-3.5 rounded-sm border-2 border-leaf bg-white" />
+                    <span className="h-3.5 w-3.5 rounded-full border-2 border-leaf bg-white" />
                   </button>
                 )}
                 {active && canDelete(item) && (
@@ -494,30 +508,40 @@ export function CanvasView({
         )}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center px-3 pb-[env(safe-area-inset-bottom)]">
-        <div data-toolbar className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-2xl border border-line bg-paper/95 p-2 shadow-lg">
-          {TOOLS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              disabled={!canEdit && entry.id !== 'select'}
-              aria-pressed={tool === entry.id}
-              onClick={() => {
-                setTool(entry.id)
-                if (entry.id === 'text') setColor(TEXT_COLORS[0])
-                else if (tool === 'text') setColor(NOTE_COLORS[0])
-              }}
-              className={cn(
-                'flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[11px]',
-                tool === entry.id ? 'bg-leaf text-white' : 'hover:bg-cream',
-              )}
-            >
-              <entry.icon className="h-4 w-4" />
-              {entry.label}
-            </button>
-          ))}
+      <div className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex justify-center px-3 pb-[env(safe-area-inset-bottom)] sm:bottom-5">
+        <div data-toolbar className="tool-dock pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto p-2">
+          {TOOLS.map((entry) => {
+            const pressed = tool === entry.id
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                disabled={!canEdit && entry.id !== 'select'}
+                aria-pressed={pressed}
+                onClick={() => {
+                  setTool(entry.id)
+                  if (entry.id === 'text') setColor(TEXT_COLORS[0])
+                  else if (tool === 'text') setColor(NOTE_COLORS[0])
+                }}
+                className={cn(
+                  'pressable flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold',
+                  pressed ? 'text-white' : 'hover:bg-white/70',
+                )}
+                style={{ background: pressed ? entry.tone : 'transparent', color: pressed ? '#fff' : entry.tone }}
+              >
+                <entry.icon className="h-4 w-4" />
+                {entry.label}
+              </button>
+            )
+          })}
           {onUpload && (
-            <label className={cn('relative flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[11px]', !canEdit && 'opacity-40')}>
+            <label
+              className={cn(
+                'pressable relative flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[13px] font-semibold',
+                !canEdit && 'opacity-40',
+              )}
+              style={{ color: '#1f7a54' }}
+            >
               <ImageIcon className="h-4 w-4" />
               相片
               <input type="file" accept="image/*" disabled={!canEdit} className="absolute inset-0 cursor-pointer opacity-0" onChange={(event) => void onPhoto(event)} />
@@ -532,7 +556,7 @@ export function CanvasView({
               aria-pressed={color === swatch}
               disabled={!canEdit}
               onClick={() => setColor(swatch)}
-              className={cn('h-11 w-11 shrink-0 rounded-xl border-4', color === swatch ? 'border-ink' : 'border-white')}
+              className={cn('pressable h-11 w-11 shrink-0 rounded-xl border-4', color === swatch ? 'border-ink' : 'border-white')}
               style={{ background: swatch }}
             />
           ))}
@@ -578,7 +602,7 @@ function IconButton({
   children: ReactNode
 }) {
   return (
-    <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="grid h-[52px] w-[52px] shrink-0 place-items-center rounded-xl hover:bg-cream disabled:opacity-40">
+    <button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick} className="pressable grid h-[52px] w-[52px] shrink-0 place-items-center rounded-xl hover:bg-white/70 disabled:opacity-40">
       {children}
     </button>
   )
