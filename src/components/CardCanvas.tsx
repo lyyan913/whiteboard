@@ -1,21 +1,35 @@
-import { Circle, Image as ImageIcon, MousePointer2, Square, Trash2, Type } from 'lucide-react'
+import { ArrowUpRight, Circle, Cloud, Heart, Image as ImageIcon, MessageCircle, MousePointer2, Pencil, Shapes, Square, Star, StickyNote, Trash2, Triangle, Type } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { FONT_SIZES, NOTE_COLOR_LABELS, NOTE_COLORS, TEXT_COLOR_LABELS, TEXT_COLORS, isNoteColor, isTextColor } from '../../shared/colors'
+import { DRAW_COLOR_LABELS, DRAW_COLORS, FONT_SIZES, NOTE_COLOR_LABELS, NOTE_COLORS, STROKE_WIDTHS, STROKE_WIDTH_LABELS, TEXT_COLOR_LABELS, TEXT_COLORS, isNoteColor, isTextColor } from '../../shared/colors'
+import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk, type FillMode, type StrokeStyle } from '../../shared/markup'
 import { isAllowedImageUrl } from '../../shared/media'
 import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
 import { makeId } from '../../shared/text'
+import { Markup } from '@/components/Markup'
 import { CARD_H, CARD_W, cardBounds, clampToCard } from '@/components/cardFrame'
 import { cn } from '@/lib/utils'
 
-type Tool = 'select' | 'text' | 'image' | 'rect' | 'ellipse'
+type Tool = 'select' | 'text' | 'sticky' | 'pen' | 'arrow' | 'image' | ShapeKind
+type ShapeKind = 'rect' | 'ellipse' | 'star' | 'heart' | 'triangle' | 'cloud' | 'bubble'
 type Corner = 'nw' | 'ne' | 'sw' | 'se'
 
 const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2 }[] = [
   { id: 'select', label: '揀', icon: MousePointer2 },
+  { id: 'pen', label: '畫筆', icon: Pencil },
   { id: 'text', label: '文字', icon: Type },
-  { id: 'image', label: '相片', icon: ImageIcon },
+  { id: 'sticky', label: '便利貼', icon: StickyNote },
+  { id: 'rect', label: '圖形', icon: Shapes },
+  { id: 'arrow', label: '箭咀', icon: ArrowUpRight },
+]
+
+const SHAPES: { id: ShapeKind; label: string; icon: typeof Square }[] = [
   { id: 'rect', label: '方形', icon: Square },
   { id: 'ellipse', label: '圓形', icon: Circle },
+  { id: 'triangle', label: '三角', icon: Triangle },
+  { id: 'star', label: '星', icon: Star },
+  { id: 'heart', label: '心', icon: Heart },
+  { id: 'cloud', label: '雲', icon: Cloud },
+  { id: 'bubble', label: '對話框', icon: MessageCircle },
 ]
 
 const SIZE_LABEL: Record<(typeof FONT_SIZES)[number], string> = { 18: '細', 28: '中', 40: '大' }
@@ -25,10 +39,17 @@ function colorName(kind: ItemKind, swatch: string) {
   return NOTE_COLOR_LABELS[swatch as keyof typeof NOTE_COLOR_LABELS] ?? '顏色'
 }
 
-function defaultSize(kind: 'text' | 'rect' | 'ellipse') {
+function defaultSize(kind: Tool) {
   if (kind === 'text') return { w: 280, h: 96 }
-  if (kind === 'rect') return { w: 220, h: 150 }
-  return { w: 180, h: 180 }
+  if (kind === 'sticky') return { w: 240, h: 180 }
+  if (kind === 'arrow') return { w: 180, h: 120 }
+  if (kind === 'cloud' || kind === 'bubble') return { w: 220, h: 160 }
+  if (kind === 'star' || kind === 'heart' || kind === 'triangle' || kind === 'ellipse') return { w: 160, h: 160 }
+  return { w: 220, h: 150 }
+}
+
+function graphicKind(kind: string) {
+  return kind === 'pen' || kind === 'arrow' || isShapeKind(kind)
 }
 
 export function CardCanvas({
@@ -62,8 +83,6 @@ export function CardCanvas({
 }) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const pendingPoint = useRef<{ x: number; y: number } | null>(null)
   const itemsRef = useRef(items)
   const boundsRef = useRef(cardBounds(items))
   const scaleRef = useRef(1)
@@ -79,8 +98,12 @@ export function CardCanvas({
   const [scale, setScale] = useState(0.4)
   const [ready, setReady] = useState(false)
   const [tool, setTool] = useState<Tool>('select')
-  const [color, setColor] = useState<string>(TEXT_COLORS[0])
+  const [color, setColor] = useState<string>(DRAW_COLORS[1])
   const [textSize, setTextSize] = useState<(typeof FONT_SIZES)[number]>(28)
+  const [strokeWidth, setStrokeWidth] = useState<(typeof STROKE_WIDTHS)[number]>(8)
+  const [strokeStyle, setStrokeStyle] = useState<StrokeStyle>('solid')
+  const [fillMode, setFillMode] = useState<FillMode>('both')
+  const [ink, setInk] = useState<{ x: number; y: number }[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draftText, setDraftText] = useState('')
@@ -93,6 +116,7 @@ export function CardCanvas({
     setEditing(null)
     editingRef.current = null
     setDraft(null)
+    setInk(null)
   }, [pageId])
 
   useLayoutEffect(() => {
@@ -182,8 +206,32 @@ export function CardCanvas({
   function chooseTool(next: Tool) {
     setTool(next)
     if (next === 'text' && !isTextColor(color)) setColor(TEXT_COLORS[0])
-    if (next === 'rect' && !isNoteColor(color)) setColor(NOTE_COLORS[2])
-    if (next === 'ellipse' && !isNoteColor(color)) setColor(NOTE_COLORS[3])
+    if (next === 'sticky' && !isNoteColor(color)) setColor(NOTE_COLORS[0])
+    if ((next === 'pen' || next === 'arrow' || isShapeKind(next)) && color === TEXT_COLORS[0]) setColor(DRAW_COLORS[1])
+  }
+
+  function placeInk(points: { x: number; y: number }[], kind: 'pen' | 'arrow') {
+    const simplified = simplifyInk(points)
+    const frame = inkFrame(simplified, strokeWidth + 10)
+    const fitted = clampToCard(frame.x, frame.y, frame.w, frame.h)
+    const shiftX = fitted.x - frame.x
+    const shiftY = fitted.y - frame.y
+    const relative = frame.relative.map((point) => ({ x: point.x - shiftX, y: point.y - shiftY }))
+    void onCreate({
+      id: makeId(12),
+      kind,
+      x: fitted.x,
+      y: fitted.y,
+      w: fitted.w,
+      h: fitted.h,
+      color,
+      text: encodeInk(strokeStyle, relative),
+      fontSize: strokeWidth,
+    }).then((created) => {
+      if (!created) return
+      setTool('select')
+      setSelected(created.id)
+    })
   }
 
   function onCardPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -199,11 +247,27 @@ export function CardCanvas({
       setSelected(null)
       return
     }
-    if (!canEdit || tool === 'select') return
+    if (!canEdit || tool === 'select' || tool === 'image') return
     const origin = screenToCard(event.clientX, event.clientY)
-    if (tool === 'image') {
-      pendingPoint.current = origin
-      fileRef.current?.click()
+    if (tool === 'pen' || tool === 'arrow') {
+      const points = [origin]
+      setInk(points)
+      const move = (pointer: PointerEvent) => {
+        const point = screenToCard(pointer.clientX, pointer.clientY)
+        const last = points[points.length - 1]
+        if (Math.hypot(point.x - last.x, point.y - last.y) < 2) return
+        points.push(point)
+        setInk(points.slice())
+      }
+      const up = () => {
+        window.removeEventListener('pointermove', move)
+        window.removeEventListener('pointerup', up)
+        setInk(null)
+        if (tool === 'arrow' && points.length < 2) return
+        placeInk(points, tool)
+      }
+      window.addEventListener('pointermove', move)
+      window.addEventListener('pointerup', up)
       return
     }
     const startX = event.clientX
@@ -223,7 +287,7 @@ export function CardCanvas({
       setDraft(null)
       const point = screenToCard(pointer.clientX, pointer.clientY)
       const kind = tool
-      if (kind !== 'text' && kind !== 'rect' && kind !== 'ellipse') return
+      if (kind !== 'text' && kind !== 'sticky' && !isShapeKind(kind)) return
       const size = defaultSize(kind)
       const wide = Math.hypot(pointer.clientX - startX, pointer.clientY - startY) > 8 && Math.abs(point.x - origin.x) > 24 && Math.abs(point.y - origin.y) > 24
       const raw = wide
@@ -239,9 +303,9 @@ export function CardCanvas({
         id: makeId(12),
         kind,
         ...rect,
-        color,
-        text: '',
-        fontSize: kind === 'text' ? textSize : 28,
+        color: kind === 'sticky' && !isNoteColor(color) ? NOTE_COLORS[0] : color,
+        text: isShapeKind(kind) ? fillMode : '',
+        fontSize: kind === 'text' ? textSize : isShapeKind(kind) ? strokeWidth : 28,
       }).then((created) => {
         if (!created) return
         setTool('select')
@@ -253,16 +317,14 @@ export function CardCanvas({
     window.addEventListener('pointerup', up)
   }
 
-  async function onFile(event: ChangeEvent<HTMLInputElement>) {
+  async function onPhoto(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ''
-    const point = pendingPoint.current
-    pendingPoint.current = null
-    if (!file || !point) return
+    if (!file || !canEdit) return
     try {
       const url = await onUpload(file)
       if (!url) return
-      const rect = clampToCard(point.x - 160, point.y - 120, 320, 240)
+      const rect = clampToCard(CARD_W / 2 - 180, CARD_H / 2 - 130, 360, 260)
       const created = await onCreate({
         id: makeId(12),
         kind: 'image',
@@ -353,9 +415,13 @@ export function CardCanvas({
   const handle = Math.max(28, 44 / scale)
   const ring = 3 / scale
 
+  const shapeOpen = isShapeKind(tool)
+  const inkOpen = tool === 'pen' || tool === 'arrow' || shapeOpen
+  const liveInk = ink && ink.length > 1 ? inkFrame(ink, 0) : null
+
   return (
-    <div className="relative min-h-0 flex-1 bg-cream">
-      <div ref={viewportRef} className="absolute inset-x-0 top-0 bottom-[7.25rem] overflow-auto">
+    <div className="flex min-h-0 flex-1 flex-col bg-cream">
+      <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-auto">
         <div className={cn('flex min-h-full min-w-full items-center justify-center p-3', ready ? 'card-in' : 'opacity-0')}>
           <div style={{ width: bounds.w * scale, height: bounds.h * scale }}>
             <div
@@ -389,7 +455,8 @@ export function CardCanvas({
                   onNodeDown={onNodeDown}
                   onResizeDown={onResizeDown}
                   onEdit={() => {
-                    if (!canEdit || item.kind === 'image') return
+                    if (!canEdit || item.kind === 'image' || item.kind === 'pen' || item.kind === 'arrow') return
+                    if (isShapeKind(item.kind) && isFillMode(item.text || 'both')) return
                     beginEdit(item)
                   }}
                   onFit={(rect) => {
@@ -408,12 +475,24 @@ export function CardCanvas({
                   style={{ left: draft.x - bounds.minX, top: draft.y - bounds.minY, width: draft.w, height: draft.h }}
                 />
               )}
+              {liveInk && (
+                <svg className="pointer-events-none absolute overflow-visible" style={{ left: -bounds.minX, top: -bounds.minY, width: CARD_W, height: CARD_H }}>
+                  <polyline
+                    points={(ink ?? []).map((point) => `${point.x},${point.y}`).join(' ')}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={strokeWidth}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
             </div>
           </div>
         </div>
       </div>
       {items.length === 0 && !draft && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 bottom-[7.25rem] z-10 grid place-items-center px-6 text-center">
+        <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center px-6 text-center">
           <div className="max-w-md rounded-2xl bg-white/90 px-5 py-4 shadow-sm">
             <p className="font-serif text-2xl font-bold">{locked && role !== 'teacher' ? '老師暫停咗編輯' : '呢個版面未有內容'}</p>
             <ol className="mt-3 space-y-1 text-left text-lg text-muted">
@@ -421,7 +500,7 @@ export function CardCanvas({
                 <li>而家只可以睇。</li>
               ) : (
                 <>
-                  <li>① 撳下面「文字／相片／圖形」加內容</li>
+                  <li>① 撳下面「畫筆／文字／相片／圖形」加內容</li>
                   <li>② 小組可以一齊改呢一版</li>
                 </>
               )}
@@ -430,10 +509,10 @@ export function CardCanvas({
         </div>
       )}
 
-      <div className="absolute inset-x-0 bottom-0 z-20 px-2 pb-[max(0.4rem,env(safe-area-inset-bottom))]">
+      <div className="z-20 px-2 pb-[max(0.4rem,env(safe-area-inset-bottom))] pt-1">
         <div
           data-toolbar
-          className="mx-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-2xl border border-line bg-paper/95 p-1.5 shadow-lg"
+          className="mx-auto flex max-w-full flex-col gap-1 rounded-2xl border border-line bg-paper/95 p-1.5 shadow-lg"
           onPointerDown={(event) => {
             if (!editingRef.current) return
             if ((event.target as HTMLElement).closest('[data-commit]')) return
@@ -460,57 +539,131 @@ export function CardCanvas({
             />
           ) : (
             <>
-              {TOOLS.map((entry) => (
-                <ToolButton
-                  key={entry.id}
-                  label={entry.label}
-                  pressed={tool === entry.id}
-                  disabled={!canEdit && entry.id !== 'select'}
-                  onClick={() => chooseTool(entry.id)}
+              <div className="flex items-center gap-1 overflow-x-auto">
+                {TOOLS.map((entry) => (
+                  <ToolButton
+                    key={entry.id}
+                    label={entry.label}
+                    pressed={entry.id === 'rect' ? shapeOpen : tool === entry.id}
+                    disabled={!canEdit && entry.id !== 'select'}
+                    onClick={() => chooseTool(entry.id === 'rect' && !shapeOpen ? 'rect' : entry.id)}
+                  >
+                    <entry.icon className="h-6 w-6" />
+                  </ToolButton>
+                ))}
+                <label
+                  className={cn(
+                    'relative flex h-[4.5rem] min-w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-sm font-semibold',
+                    !canEdit && 'opacity-40',
+                  )}
                 >
-                  <entry.icon className="h-6 w-6" />
-                </ToolButton>
-              ))}
-              {(tool === 'text' || tool === 'rect' || tool === 'ellipse') && (
-                <>
-                  <span className="mx-1 h-10 w-px shrink-0 bg-line" />
-                  {(tool === 'text' ? TEXT_COLORS : NOTE_COLORS).map((swatch) => (
+                  <ImageIcon className="h-6 w-6" />
+                  相片
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={!canEdit}
+                    className="absolute inset-0 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+                    onChange={(event) => void onPhoto(event)}
+                  />
+                </label>
+              </div>
+              {(tool === 'text' || tool === 'sticky' || inkOpen) && (
+                <div className="flex items-center gap-1 overflow-x-auto border-t border-line pt-1">
+                  {(tool === 'text' ? TEXT_COLORS : tool === 'sticky' ? NOTE_COLORS : DRAW_COLORS).map((swatch) => (
                     <ColorDot
                       key={swatch}
                       swatch={swatch}
-                      label={colorName(tool === 'text' ? 'text' : 'rect', swatch)}
+                      label={tool === 'text' ? colorName('text', swatch) : tool === 'sticky' ? colorName('sticky', swatch) : (DRAW_COLOR_LABELS[swatch as keyof typeof DRAW_COLOR_LABELS] ?? '顏色')}
                       pressed={color === swatch}
                       disabled={!canEdit}
                       onClick={() => setColor(swatch)}
                     />
                   ))}
-                </>
-              )}
-              {tool === 'text' && (
-                <>
-                  <span className="mx-1 h-10 w-px shrink-0 bg-line" />
-                  {FONT_SIZES.map((size) => (
-                    <button
-                      key={size}
-                      type="button"
-                      aria-pressed={textSize === size}
-                      disabled={!canEdit}
-                      onClick={() => setTextSize(size)}
-                      className={cn(
-                        'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-lg font-bold',
-                        textSize === size ? 'bg-leaf text-white' : 'hover:bg-cream',
-                      )}
-                    >
-                      {SIZE_LABEL[size]}
-                    </button>
-                  ))}
-                </>
+                  {tool === 'text' &&
+                    FONT_SIZES.map((size) => (
+                      <button
+                        key={size}
+                        type="button"
+                        aria-pressed={textSize === size}
+                        disabled={!canEdit}
+                        onClick={() => setTextSize(size)}
+                        className={cn(
+                          'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-lg font-bold',
+                          textSize === size ? 'bg-leaf text-white' : 'hover:bg-cream',
+                        )}
+                      >
+                        {SIZE_LABEL[size]}
+                      </button>
+                    ))}
+                  {inkOpen &&
+                    STROKE_WIDTHS.map((size) => (
+                      <button
+                        key={size}
+                        type="button"
+                        aria-pressed={strokeWidth === size}
+                        disabled={!canEdit}
+                        onClick={() => setStrokeWidth(size)}
+                        className={cn(
+                          'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
+                          strokeWidth === size ? 'bg-leaf text-white' : 'hover:bg-cream',
+                        )}
+                      >
+                        {STROKE_WIDTH_LABELS[size]}
+                      </button>
+                    ))}
+                  {(tool === 'pen' || tool === 'arrow') &&
+                    ([
+                      ['solid', '實線'],
+                      ['dash', '虛線'],
+                      ['dot', '點線'],
+                    ] as const).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        aria-pressed={strokeStyle === id}
+                        disabled={!canEdit}
+                        onClick={() => setStrokeStyle(id)}
+                        className={cn(
+                          'grid h-14 min-w-14 shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
+                          strokeStyle === id ? 'bg-leaf text-white' : 'hover:bg-cream',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  {shapeOpen &&
+                    ([
+                      ['both', '填色加框'],
+                      ['fill', '填色'],
+                      ['line', '外框'],
+                    ] as const).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        aria-pressed={fillMode === id}
+                        disabled={!canEdit}
+                        onClick={() => setFillMode(id)}
+                        className={cn(
+                          'grid h-14 min-w-[4.5rem] shrink-0 place-items-center rounded-xl px-2 text-base font-bold',
+                          fillMode === id ? 'bg-leaf text-white' : 'hover:bg-cream',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  {shapeOpen &&
+                    SHAPES.map((shape) => (
+                      <ToolButton key={shape.id} label={shape.label} pressed={tool === shape.id} disabled={!canEdit} onClick={() => chooseTool(shape.id)}>
+                        <shape.icon className="h-6 w-6" />
+                      </ToolButton>
+                    ))}
+                </div>
               )}
             </>
           )}
         </div>
       </div>
-      <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" className="hidden" onChange={(event) => void onFile(event)} />
     </div>
   )
 }
@@ -587,6 +740,8 @@ function CardNode({
 }) {
   const isText = item.kind === 'text'
   const isImage = item.kind === 'image'
+  const graphic = graphicKind(item.kind)
+  const caption = graphic && !isFillMode(item.text) && item.kind !== 'pen' && item.kind !== 'arrow' ? item.text : ''
   const fontSize = item.fontSize || 28
   const corners: Corner[] = ['nw', 'ne', 'sw', 'se']
   return (
@@ -599,11 +754,11 @@ function CardNode({
         width: item.w,
         height: item.h,
         zIndex: item.z,
-        background: isText || isImage ? 'transparent' : item.color,
+        background: isText || isImage || graphic ? 'transparent' : item.color,
         color: isText ? item.color : '#2a2118',
-        borderRadius: item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 8 : 14,
-        border: item.kind === 'rect' ? '3px solid #2a2118' : undefined,
-        boxShadow: active ? `0 0 0 ${ring}px #1f7a54` : isText || isImage ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
+        borderRadius: graphic ? 0 : item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 8 : 14,
+        border: !graphic && item.kind === 'rect' ? '3px solid #2a2118' : undefined,
+        boxShadow: active ? `0 0 0 ${ring}px #1f7a54` : isText || isImage || graphic ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
       }}
       onPointerDown={(event) => onNodeDown(event, item)}
       onDoubleClick={(event) => {
@@ -612,6 +767,7 @@ function CardNode({
       }}
     >
       {item.kind === 'sticky' && <span className="tape" aria-hidden />}
+      {graphic && <Markup item={item} />}
       {isImage ? (
         isAllowedImageUrl(item.text) ? (
           <img
@@ -650,6 +806,10 @@ function CardNode({
           onPointerDown={(event) => event.stopPropagation()}
           onBlur={onCommit}
         />
+      ) : graphic ? (
+        caption ? (
+          <div className="pointer-events-none grid h-full w-full place-items-center p-3 text-center text-lg font-semibold">{caption}</div>
+        ) : null
       ) : (
         <div
           className={cn(
@@ -706,7 +866,7 @@ function EditBar({
   onDone: () => void
   onDelete: () => void
 }) {
-  const colors = item.kind === 'text' ? TEXT_COLORS : item.kind === 'rect' || item.kind === 'ellipse' || item.kind === 'sticky' ? NOTE_COLORS : []
+  const colors = item.kind === 'text' ? TEXT_COLORS : item.kind === 'sticky' ? NOTE_COLORS : item.kind === 'image' ? [] : DRAW_COLORS
   return (
     <>
       <ToolButton label="揀" pressed={false} onClick={onBack}>

@@ -108,13 +108,13 @@ export function PostComposer({
           {kind === 'image' && (
             <div className="space-y-2">
               <Label htmlFor="image-file">圖片</Label>
-              <label className="flex min-h-14 cursor-pointer items-center justify-center rounded-2xl border border-line bg-paper px-4 text-base font-semibold">
+              <label className="relative flex min-h-14 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border border-line bg-paper px-4 text-base font-semibold">
                 {file ? file.name : '選擇圖片'}
                 <input
                   id="image-file"
                   type="file"
-                  accept="image/jpeg,image/png,image/gif,image/webp"
-                  className="sr-only"
+                  accept="image/*"
+                  className="absolute inset-0 cursor-pointer opacity-0"
                   onChange={(event) => {
                     const next = event.target.files?.[0] ?? null
                     setFile(next)

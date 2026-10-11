@@ -39,10 +39,45 @@ export function isFontSize(value: number) {
   return value === 18 || value === 28 || value === 40
 }
 
-export function defaultItemColor(kind: 'sticky' | 'text' | 'rect' | 'ellipse' | 'image') {
+export const DRAW_COLORS = ['#1f1a14', '#c4492c', '#e11d48', '#f59e0b', '#facc15', '#1f7a54', '#1d4e89', '#2563eb', '#6b4c9a', '#ffffff', '#ffe9a0', '#ffd0dc'] as const
+
+export const DRAW_COLOR_LABELS: Record<(typeof DRAW_COLORS)[number], string> = {
+  '#1f1a14': '墨色',
+  '#c4492c': '朱紅',
+  '#e11d48': '玫紅',
+  '#f59e0b': '橙色',
+  '#facc15': '黃色',
+  '#1f7a54': '綠色',
+  '#1d4e89': '深藍',
+  '#2563eb': '藍色',
+  '#6b4c9a': '紫色',
+  '#ffffff': '白色',
+  '#ffe9a0': '淺黃',
+  '#ffd0dc': '粉紅',
+}
+
+export const STROKE_WIDTHS = [4, 8, 14] as const
+
+export const STROKE_WIDTH_LABELS: Record<(typeof STROKE_WIDTHS)[number], string> = {
+  4: '幼',
+  8: '中',
+  14: '粗',
+}
+
+export function isStrokeWidth(value: number) {
+  return value === 4 || value === 8 || value === 14
+}
+
+export function isHexColor(value: string) {
+  return /^#[0-9a-fA-F]{6}$/.test(value)
+}
+
+export function defaultItemColor(kind: string) {
   if (kind === 'text') return TEXT_COLORS[0]
-  if (kind === 'rect') return NOTE_COLORS[2]
+  if (kind === 'rect' || kind === 'cloud' || kind === 'bubble') return NOTE_COLORS[2]
   if (kind === 'ellipse') return NOTE_COLORS[3]
   if (kind === 'image') return NOTE_COLORS[5]
+  if (kind === 'pen' || kind === 'arrow') return '#c4492c'
+  if (kind === 'heart' || kind === 'star') return '#e11d48'
   return NOTE_COLORS[0]
 }

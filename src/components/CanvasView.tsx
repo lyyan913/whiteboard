@@ -1,18 +1,25 @@
-import { Circle, MousePointer2, Scan, Square, StickyNote, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowUpRight, Circle, Heart, Image as ImageIcon, MousePointer2, Pencil, Scan, Square, Star, StickyNote, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { NOTE_COLOR_LABELS, NOTE_COLORS, TEXT_COLOR_LABELS, TEXT_COLORS } from '../../shared/colors'
-import type { CanvasItem, ItemKind, Role } from '../../shared/types'
+import { encodeInk, inkFrame, isFillMode, isShapeKind, simplifyInk } from '../../shared/markup'
+import { isAllowedImageUrl } from '../../shared/media'
+import type { CanvasItem, ItemCreate, ItemKind, Role } from '../../shared/types'
 import { makeId } from '../../shared/text'
+import { Markup } from '@/components/Markup'
 import { cn } from '@/lib/utils'
 
 type Tool = 'select' | ItemKind
 
 const TOOLS: { id: Tool; label: string; icon: typeof MousePointer2 }[] = [
-  { id: 'select', label: '選取', icon: MousePointer2 },
-  { id: 'sticky', label: '便利貼', icon: StickyNote },
+  { id: 'select', label: '揀', icon: MousePointer2 },
+  { id: 'pen', label: '畫筆', icon: Pencil },
   { id: 'text', label: '文字', icon: Type },
+  { id: 'sticky', label: '便利貼', icon: StickyNote },
   { id: 'rect', label: '方形', icon: Square },
   { id: 'ellipse', label: '圓形', icon: Circle },
+  { id: 'star', label: '星', icon: Star },
+  { id: 'heart', label: '心', icon: Heart },
+  { id: 'arrow', label: '箭咀', icon: ArrowUpRight },
 ]
 
 function defaultSize(kind: ItemKind) {
@@ -32,6 +39,7 @@ export function CanvasView({
   clientId,
   locked,
   onCreate,
+  onUpload,
   onLocal,
   onUpdate,
   onDelete,
@@ -42,7 +50,8 @@ export function CanvasView({
   role: Role
   clientId: string
   locked: boolean
-  onCreate: (input: { id: string; kind: ItemKind; x: number; y: number; w: number; h: number; color: string }) => Promise<CanvasItem | null>
+  onCreate: (input: ItemCreate) => Promise<CanvasItem | null>
+  onUpload?: (file: File) => Promise<string | null>
   onLocal: (id: string, patch: Partial<CanvasItem>) => void
   onUpdate: (id: string, patch: Partial<CanvasItem>) => Promise<void> | void
   onDelete: (id: string) => Promise<void> | void
@@ -211,10 +220,17 @@ export function CanvasView({
     const startY = event.clientY
     const origin = camera.current
     const world = screenToWorld(event.clientX, event.clientY)
-    const mode = event.button === 1 || tool === 'select' || !canEdit ? 'pan' : 'create'
+    const mode = event.button === 1 || tool === 'select' || tool === 'image' || !canEdit ? 'pan' : tool === 'pen' || tool === 'arrow' ? 'ink' : 'create'
     let moved = false
+    const inkPoints = [world]
     const move = (pointer: PointerEvent) => {
       moved = Math.hypot(pointer.clientX - startX, pointer.clientY - startY) > 5
+      if (mode === 'ink') {
+        const point = screenToWorld(pointer.clientX, pointer.clientY)
+        const last = inkPoints[inkPoints.length - 1]
+        if (Math.hypot(point.x - last.x, point.y - last.y) >= 2) inkPoints.push(point)
+        return
+      }
       if (mode === 'pan') {
         camera.current.x = origin.x + (pointer.clientX - startX)
         camera.current.y = origin.y + (pointer.clientY - startY)
@@ -236,6 +252,25 @@ export function CanvasView({
         if (!moved) setSelected(null)
         return
       }
+      if (mode === 'ink') {
+        const kind = tool === 'arrow' ? 'arrow' : 'pen'
+        if (kind === 'arrow' && inkPoints.length < 2) return
+        const frame = inkFrame(simplifyInk(inkPoints), 16)
+        void onCreate({
+          id: makeId(12),
+          kind,
+          x: frame.x,
+          y: frame.y,
+          w: frame.w,
+          h: frame.h,
+          color,
+          text: encodeInk('solid', frame.relative),
+          fontSize: 8,
+        }).then((created) => {
+          if (created) setSelected(created.id)
+        })
+        return
+      }
       setDraft(null)
       const point = screenToWorld(pointer.clientX, pointer.clientY)
       const kind = tool as ItemKind
@@ -244,7 +279,14 @@ export function CanvasView({
       const rect = wide
         ? { x: Math.min(world.x, point.x), y: Math.min(world.y, point.y), w: Math.max(48, Math.abs(point.x - world.x)), h: Math.max(36, Math.abs(point.y - world.y)) }
         : { x: world.x - size.w / 2, y: world.y - size.h / 2, w: size.w, h: size.h }
-      void onCreate({ id: makeId(12), kind, ...rect, color }).then((created) => {
+      void onCreate({
+        id: makeId(12),
+        kind,
+        ...rect,
+        color,
+        text: isShapeKind(kind) ? 'both' : '',
+        fontSize: isShapeKind(kind) ? 8 : 28,
+      }).then((created) => {
         if (!created) return
         setSelected(created.id)
         if (created.kind === 'sticky' || created.kind === 'text') setEditing(created.id)
@@ -306,6 +348,28 @@ export function CanvasView({
     window.addEventListener('pointerup', up)
   }
 
+  async function onPhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !onUpload || !canEdit) return
+    const url = await onUpload(file)
+    if (!url) return
+    const rect = viewportRef.current?.getBoundingClientRect()
+    const center = rect ? screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2) : { x: 200, y: 160 }
+    const created = await onCreate({
+      id: makeId(12),
+      kind: 'image',
+      x: center.x - 160,
+      y: center.y - 120,
+      w: 320,
+      h: 240,
+      color: NOTE_COLORS[5],
+      text: url,
+      fontSize: 28,
+    })
+    if (created) setSelected(created.id)
+  }
+
   const ordered = [...items].sort((a, b) => a.z - b.z || a.createdAt - b.createdAt)
 
   return (
@@ -321,6 +385,8 @@ export function CanvasView({
             const active = selected === item.id
             const isText = item.kind === 'text'
             const isImage = item.kind === 'image'
+            const graphic = item.kind === 'pen' || item.kind === 'arrow' || isShapeKind(item.kind)
+            const caption = graphic && !isFillMode(item.text) && item.kind !== 'pen' && item.kind !== 'arrow' ? item.text : ''
             return (
               <div
                 key={item.id}
@@ -332,23 +398,28 @@ export function CanvasView({
                   width: item.w,
                   height: item.h,
                   zIndex: item.z,
-                  background: isText || isImage ? 'transparent' : item.color,
+                  background: isText || isImage || graphic ? 'transparent' : item.color,
                   color: isText ? item.color : '#2a2118',
-                  borderRadius: item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 4 : 14,
-                  border: item.kind === 'rect' ? '2px solid #2a2118' : undefined,
-                  boxShadow: isText || isImage ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
+                  borderRadius: graphic ? 0 : item.kind === 'ellipse' ? 999 : item.kind === 'rect' ? 4 : 14,
+                  border: !graphic && item.kind === 'rect' ? '2px solid #2a2118' : undefined,
+                  boxShadow: isText || isImage || graphic ? 'none' : '0 10px 24px rgba(70, 36, 8, 0.16)',
                 }}
                 onPointerDown={(event) => onNodeDown(event, item)}
                 onDoubleClick={(event) => {
                   event.stopPropagation()
-                  if (!canEdit || isImage) return
+                  if (!canEdit || isImage || item.kind === 'pen' || item.kind === 'arrow' || (graphic && isFillMode(item.text || 'both'))) return
                   setSelected(item.id)
                   setEditing(item.id)
                 }}
               >
                 {item.kind === 'sticky' && <span className="tape" aria-hidden />}
+                {graphic && <Markup item={item} />}
                 {isImage ? (
-                  <img src={item.text} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />
+                  isAllowedImageUrl(item.text) ? (
+                    <img src={item.text} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />
+                  ) : (
+                    <div className="grid h-full place-items-center text-sm text-muted">相片</div>
+                  )
                 ) : editing === item.id ? (
                   <textarea
                     autoFocus
@@ -372,7 +443,7 @@ export function CanvasView({
                       (item.kind === 'rect' || item.kind === 'ellipse') && 'grid place-items-center text-center',
                     )}
                   >
-                    {item.text || (active ? '按兩下輸入文字' : '')}
+                    {graphic ? caption : item.text || (active ? '按兩下輸入文字' : '')}
                   </div>
                 )}
                 {active && canEdit && (
@@ -444,6 +515,13 @@ export function CanvasView({
               {entry.label}
             </button>
           ))}
+          {onUpload && (
+            <label className={cn('relative flex h-14 min-w-14 flex-col items-center justify-center rounded-xl px-2 text-[11px]', !canEdit && 'opacity-40')}>
+              <ImageIcon className="h-4 w-4" />
+              相片
+              <input type="file" accept="image/*" disabled={!canEdit} className="absolute inset-0 cursor-pointer opacity-0" onChange={(event) => void onPhoto(event)} />
+            </label>
+          )}
           <span className="mx-1 h-8 w-px bg-line" />
           {colors.map((swatch) => (
             <button

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { CanvasItem, ItemCreate, Role, SandboxPage } from '../../shared/types'
 import { isAllowedImageUrl } from '../../shared/media'
 import { CardCanvas } from '@/components/CardCanvas'
+import { Markup } from '@/components/Markup'
 import { CARD_H, CARD_W, cardBounds } from '@/components/cardFrame'
 import { MenuItem, PopoverMenu } from '@/components/PopoverMenu'
 import { Button } from '@/components/ui/button'
@@ -177,7 +178,7 @@ export function SandboxShell({
               <ol className="mt-4 space-y-2 text-left text-lg text-muted">
                 {canAdd ? (
                   <>
-                    <li>① 撳「＋ 新版面」</li>
+                    <li>① 撳「＋ 卡片」</li>
                     <li>② 改名，例如「第1組」</li>
                     <li>③ 喺白色版面貼上基本資料</li>
                   </>
@@ -187,7 +188,7 @@ export function SandboxShell({
               </ol>
               {canAdd && (
                 <Button type="button" size="lg" className="mt-6 w-full" onClick={() => void addPage()}>
-                  ＋ 新版面
+                  ＋ 卡片
                 </Button>
               )}
             </div>
@@ -396,6 +397,7 @@ function CardThumb({ items }: { items: CanvasItem[] }) {
 function ThumbBit({ item, minX, minY }: { item: CanvasItem; minX: number; minY: number }) {
   const isText = item.kind === 'text'
   const isImage = item.kind === 'image' && isAllowedImageUrl(item.text)
+  const graphic = item.kind === 'pen' || item.kind === 'arrow' || item.kind === 'rect' || item.kind === 'ellipse' || item.kind === 'star' || item.kind === 'heart' || item.kind === 'triangle' || item.kind === 'cloud' || item.kind === 'bubble'
   return (
     <span
       className="absolute block overflow-hidden"
@@ -404,14 +406,14 @@ function ThumbBit({ item, minX, minY }: { item: CanvasItem; minX: number; minY: 
         top: item.y - minY,
         width: item.w,
         height: item.h,
-        background: isText ? 'transparent' : isImage ? 'transparent' : item.color,
+        background: isText || isImage || graphic ? 'transparent' : item.color,
         color: isText ? item.color : '#2a2118',
         borderRadius: item.kind === 'ellipse' ? 999 : 8,
         fontSize: isText ? item.fontSize || 28 : 18,
         lineHeight: 1.2,
       }}
     >
-      {isImage ? <img src={item.text} alt="" className="h-full w-full object-contain" /> : item.kind === 'text' || item.kind === 'sticky' ? item.text : ''}
+      {graphic ? <Markup item={item} /> : isImage ? <img src={item.text} alt="" className="h-full w-full object-contain" /> : item.kind === 'text' || item.kind === 'sticky' ? item.text : ''}
     </span>
   )
 }
@@ -426,7 +428,7 @@ function AddCardButton({ onClick, compact = false }: { onClick: () => void; comp
         compact ? 'min-h-[92px] min-w-[92px] px-3 text-base' : 'min-h-14 w-full px-2 text-base',
       )}
     >
-      ＋ 新版面
+      ＋ 卡片
     </button>
   )
 }

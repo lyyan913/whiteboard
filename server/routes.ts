@@ -4,9 +4,10 @@ import { Router } from 'express'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import multer from 'multer'
-import { isFontSize, isNoteColor, isTextColor } from '../shared/colors'
+import { isFontSize, isHexColor, isNoteColor, isStrokeWidth, isTextColor } from '../shared/colors'
+import { isItemKind, isShapeKind } from '../shared/markup'
 import { extractYouTubeId, isAllowedImageUrl } from '../shared/media'
-import type { BoardType, CanvasItem, ItemKind, Post, PostKind, WallLayout } from '../shared/types'
+import type { BoardType, CanvasItem, Post, PostKind, WallLayout } from '../shared/types'
 import { cleanBody, cleanClientId, cleanText, makeId } from '../shared/text'
 import {
   assertRateLimit,
@@ -61,7 +62,7 @@ import { broadcast } from './hub'
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 12 * 1024 * 1024, files: 1 },
 })
 
 function teacherOf(req: Request) {
@@ -103,6 +104,10 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function sniffImage(buffer: Buffer) {
+  if (buffer.length > 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
+    const brand = buffer.subarray(8, 12).toString('ascii').toLowerCase()
+    if (brand.startsWith('hei') || brand.startsWith('mif') || brand === 'msf1' || brand === 'hevc') return 'heic'
+  }
   if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'jpg'
   if (
     buffer.length > 8 &&
@@ -526,25 +531,32 @@ export function createApi() {
     } else {
       throw new HttpError(400, '這不是互動畫布')
     }
-    const kind = req.body?.kind as ItemKind
-    if (kind !== 'sticky' && kind !== 'text' && kind !== 'rect' && kind !== 'ellipse' && kind !== 'image') {
-      throw new HttpError(400, '物件類型不正確')
-    }
+    const kind = typeof req.body?.kind === 'string' ? req.body.kind : ''
+    if (!isItemKind(kind)) throw new HttpError(400, '物件類型不正確')
     const requestedId = cleanText(req.body?.id, 24)
     const id = /^[a-zA-Z0-9]{8,24}$/.test(requestedId) ? requestedId : makeId(12)
     if (itemIdExists(id)) throw new HttpError(409, '請再試一次')
-    let text = cleanBody(req.body?.text, 1000)
+    let text = cleanBody(req.body?.text, kind === 'pen' || kind === 'arrow' ? 8000 : 2000)
     let color = typeof req.body?.color === 'string' ? req.body.color : ''
     if (kind === 'image') {
       text = text.trim()
       if (!isAllowedImageUrl(text)) throw new HttpError(400, '請上傳圖片')
-      if (!isNoteColor(color)) color = '#fffdf8'
+      if (!isHexColor(color)) color = '#fffdf8'
+    } else if (kind === 'pen' || kind === 'arrow') {
+      if (!text.includes(',')) throw new HttpError(400, '請畫長一點')
+      if (!isHexColor(color)) throw new HttpError(400, '不支援這個顏色')
+    } else if (isShapeKind(kind)) {
+      if (text !== 'fill' && text !== 'line' && text !== 'both') text = 'both'
+      if (!isHexColor(color) && !isNoteColor(color)) throw new HttpError(400, '不支援這個顏色')
     } else if (kind === 'text') {
-      if (!isTextColor(color)) throw new HttpError(400, '不支援這個顏色')
-    } else if (!isNoteColor(color)) {
+      if (!isTextColor(color) && !isHexColor(color)) throw new HttpError(400, '不支援這個顏色')
+    } else if (!isNoteColor(color) && !isHexColor(color)) {
       throw new HttpError(400, '不支援這個顏色')
     }
-    const fontSize = isFontSize(Number(req.body?.fontSize)) ? Number(req.body.fontSize) : 28
+    const requestedSize = Number(req.body?.fontSize)
+    const fontSize = kind === 'pen' || kind === 'arrow' || isShapeKind(kind)
+      ? isStrokeWidth(requestedSize) ? requestedSize : 8
+      : isFontSize(requestedSize) ? requestedSize : 28
     const now = Date.now()
     const item: CanvasItem = {
       id,
@@ -586,21 +598,25 @@ export function createApi() {
     const body = req.body ?? {}
     const next = { ...item }
     if ('text' in body) {
-      next.text = cleanBody(body.text, 1000)
+      next.text = cleanBody(body.text, item.kind === 'pen' || item.kind === 'arrow' ? 8000 : 2000)
       if (item.kind === 'image') {
         next.text = next.text.trim()
         if (!isAllowedImageUrl(next.text)) throw new HttpError(400, '請上傳圖片')
       }
+      if (isShapeKind(item.kind) && next.text !== 'fill' && next.text !== 'line' && next.text !== 'both' && next.text !== item.text) {
+        if (next.text === '') next.text = 'both'
+      }
     }
     if ('color' in body) {
       const color = typeof body.color === 'string' ? body.color : ''
-      const ok = item.kind === 'text' ? isTextColor(color) : isNoteColor(color)
+      const ok = item.kind === 'text' ? isTextColor(color) || isHexColor(color) : isNoteColor(color) || isHexColor(color)
       if (!ok) throw new HttpError(400, '不支援這個顏色')
       next.color = color
     }
     if ('fontSize' in body) {
       const fontSize = Number(body.fontSize)
-      if (!isFontSize(fontSize)) throw new HttpError(400, '字級不正確')
+      const ink = item.kind === 'pen' || item.kind === 'arrow' || isShapeKind(item.kind)
+      if (ink ? !isStrokeWidth(fontSize) : !isFontSize(fontSize)) throw new HttpError(400, '字級不正確')
       next.fontSize = fontSize
     }
     if (typeof body.x === 'number') next.x = clamp(body.x, -8000, 16000)
@@ -642,12 +658,18 @@ export function createApi() {
       try {
         const boardId = req.params.boardId
         const access = boardAccess(req, boardId)
-        writable(boardId, access.role)
+        const row = getBoardRow(boardId)
+        if (!row) throw new HttpError(404, '找不到壁報')
+        if (Number(row.locked) === 1 && access.role !== 'teacher') {
+          throw new HttpError(403, row.type === 'sandbox' ? '老師暫停咗編輯' : '壁報已鎖定')
+        }
         const file = req.file
-        if (!file) throw new HttpError(400, '請選擇圖片')
+        if (!file || file.size < 32) throw new HttpError(400, '請選擇圖片')
         const ext = sniffImage(file.buffer)
-        if (!ext) throw new HttpError(400, '只接受 JPG、PNG、GIF 或 WebP')
+        if (ext === 'heic') throw new HttpError(400, '這張是 HEIC 相片。請再選一次，或在相簿改用「最相容」格式。')
+        if (ext !== 'jpg' && ext !== 'png' && ext !== 'gif' && ext !== 'webp') throw new HttpError(400, '只接受 JPG、PNG、GIF 或 WebP')
         const filename = `${randomBytes(12).toString('hex')}.${ext}`
+        fs.mkdirSync(uploadDir, { recursive: true })
         fs.writeFileSync(path.join(uploadDir, filename), file.buffer)
         res.status(201).json({ url: `/uploads/${filename}` })
       } catch (caught) {
@@ -665,7 +687,7 @@ export function createApi() {
 
 export function errorHandler(error: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
-    res.status(400).json({ error: '圖片不能超過 5MB' })
+    res.status(400).json({ error: '相片不能超過 12MB' })
     return
   }
   if (error instanceof HttpError) {

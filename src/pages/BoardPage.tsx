@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError, api, boardTokenKey, getTeacherToken } from '@/lib/api'
+import { prepareImageFile } from '@/lib/imageFile'
 import { useIdentity } from '@/lib/identity'
 import { useBoardSocket } from '@/lib/socket'
 import { readStorage, removeStorage, writeStorage } from '@/lib/utils'
@@ -264,8 +265,9 @@ export function BoardPage() {
     if (!token || phase.kind !== 'ready') return
     let mediaUrl = input.mediaUrl
     if (input.file) {
+      const prepared = await prepareImageFile(input.file)
       const body = new FormData()
-      body.append('file', input.file)
+      body.append('file', prepared)
       const uploaded = await api<{ url: string }>(`/api/boards/${boardId}/uploads`, { method: 'POST', body, token })
       mediaUrl = uploaded.url
     }
@@ -365,10 +367,16 @@ export function BoardPage() {
     }
     const token = tokenRef.current
     if (!token) return null
-    const body = new FormData()
-    body.append('file', file)
-    const uploaded = await api<{ url: string }>(`/api/boards/${boardId}/uploads`, { method: 'POST', body, token })
-    return uploaded.url
+    try {
+      const prepared = await prepareImageFile(file)
+      const body = new FormData()
+      body.append('file', prepared)
+      const uploaded = await api<{ url: string }>(`/api/boards/${boardId}/uploads`, { method: 'POST', body, token })
+      return uploaded.url
+    } catch (error) {
+      setBanner(error instanceof Error ? error.message : '上載失敗')
+      return null
+    }
   }
 
   async function updateItem(id: string, patch: Partial<CanvasItem>) {
@@ -665,6 +673,7 @@ export function BoardPage() {
           clientId={clientId}
           locked={board.locked}
           onCreate={createItem}
+          onUpload={uploadCanvasFile}
           onLocal={(id, patch) => {
             setPhase((prev) => (prev.kind === 'ready' ? { ...prev, items: prev.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) } : prev))
           }}

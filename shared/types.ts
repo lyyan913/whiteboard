@@ -1,7 +1,7 @@
 export type BoardType = 'wall' | 'canvas' | 'sandbox'
 export type WallLayout = 'free' | 'grid'
 export type PostKind = 'text' | 'image' | 'youtube'
-export type ItemKind = 'sticky' | 'text' | 'rect' | 'ellipse' | 'image'
+export type ItemKind = 'sticky' | 'text' | 'rect' | 'ellipse' | 'image' | 'pen' | 'arrow' | 'star' | 'heart' | 'triangle' | 'cloud' | 'bubble'
 export type Role = 'teacher' | 'student'
 
 export interface Workspace {
